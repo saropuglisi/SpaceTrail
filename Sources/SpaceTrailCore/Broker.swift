@@ -119,7 +119,7 @@ public final class StorageBroker {
             try IndexMigration.removeInterruptedCopy(in: support)
             try IndexMigration.migrateIfEligible(in: support) { publish(.compacting) }
         } catch {
-            logger.notice("Compattazione rimandata: \(error.localizedDescription, privacy: .private)")
+            logger.notice("Compaction deferred · \(error.localizedDescription, privacy: .private)")
         }
         index = try IndexWriter(support: support)
         monitorMemoryPressure()
@@ -382,7 +382,7 @@ public final class StorageBroker {
                 self.scheduleFootprints(after: ProcessInfo.processInfo.systemUptime - started)
             } catch {
                 self.footprintsComplete = false
-                self.logger.notice("Misure in background rimandate: \(error.localizedDescription, privacy: .private)")
+                self.logger.notice("Background measurements deferred · \(error.localizedDescription, privacy: .private)")
                 self.scheduleFootprints(retry: true)
             }
         }
@@ -434,7 +434,7 @@ public final class StorageBroker {
                 exit(EXIT_SUCCESS)
             }
         } catch {
-            logger.notice("Compattazione rimandata: \(error.localizedDescription, privacy: .private)")
+            logger.notice("Compaction deferred · \(error.localizedDescription, privacy: .private)")
         }
     }
 
@@ -468,7 +468,7 @@ public final class StorageBroker {
                             resumed: phase == .scanning && scanStartCount > 0,
                             background: parentPID == nil, build: build, effectiveAccess: access).write(in: support)
         }
-        catch { logger.error("Stato broker: \(error.localizedDescription, privacy: .private)") }
+        catch { logger.error("Broker status · \(error.localizedDescription, privacy: .private)") }
     }
 
     private func fail(_ error: Error) -> Never {

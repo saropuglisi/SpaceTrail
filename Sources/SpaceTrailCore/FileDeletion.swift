@@ -10,11 +10,11 @@ public enum FileDeletion {
 
         public var errorDescription: String? {
             switch self {
-            case .unavailable: return "L’elemento si trova in una posizione protetta."
-            case .changed: return "L’elemento è cambiato. Selezionalo di nuovo dopo l’aggiornamento dell’indice."
-            case .missing: return "L’elemento è già stato rimosso."
+            case .unavailable: return "This item is in a protected location."
+            case .changed: return "This item has changed. Select it again after the index updates."
+            case .missing: return "This item has already been removed."
             case .system(let code) where code == EPERM || code == EACCES:
-                return "macOS impedisce la rimozione di questo elemento."
+                return "macOS prevents removal of this item."
             case .system(let code): return String(cString: strerror(code))
             }
         }

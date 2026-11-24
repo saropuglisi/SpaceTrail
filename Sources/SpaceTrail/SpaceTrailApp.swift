@@ -28,6 +28,7 @@ struct SpaceTrailApp: App {
                 else { DashboardView(model: model) }
             }
             .frame(minWidth: 780, minHeight: 520)
+            .environment(\.locale, StorageStyle.locale)
             .onAppear { lifecycle.model = model }
         }
         .defaultSize(width: 1_100, height: 720)
@@ -35,6 +36,7 @@ struct SpaceTrailApp: App {
 
         Settings {
             SettingsView(model: model)
+                .environment(\.locale, StorageStyle.locale)
         }
     }
 }

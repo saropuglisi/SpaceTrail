@@ -5,11 +5,11 @@ import SpaceTrailCore
 import SwiftUI
 
 enum DashboardSection: String, Identifiable, CaseIterable {
-    case files = "File"
-    case folders = "Cartelle"
-    case search = "Cerca"
-    case map = "Mappa"
-    case space = "Spazio"
+    case files = "Files"
+    case folders = "Folders"
+    case search = "Search"
+    case map = "Map"
+    case space = "Storage"
 
     var id: Self { self }
 
@@ -51,11 +51,11 @@ enum RemovalMethod: Sendable {
     case trash, permanent
 
     var progress: String {
-        self == .trash ? "Spostamento nel Cestino…" : "Eliminazione in corso…"
+        self == .trash ? "Moving to Trash…" : "Deleting…"
     }
 
     var failureTitle: String {
-        self == .trash ? "Spostamento non riuscito" : "File non eliminati"
+        self == .trash ? "Could Not Move to Trash" : "Could Not Delete Files"
     }
 }
 
@@ -82,17 +82,19 @@ struct DeletionReport: Sendable {
     var summary: String {
         var parts: [String] = []
         if hasItemsInTrash {
-            parts.append(removed.first?.isFolder == true ? "Cartella nel Cestino" : "\(removed.count.formatted()) file nel Cestino")
+            let count = removed.count
+            let moved = count == 1 ? "1 file moved to Trash" : "\(StorageStyle.count(count)) files moved to Trash"
+            parts.append(removed.first?.isFolder == true ? "Folder moved to Trash" : moved)
         }
-        else if !removed.isEmpty { parts.append(removed.count == 1 ? "1 file eliminato" : "\(removed.count.formatted()) file eliminati") }
-        if !missing.isEmpty { parts.append(missing.first?.isFolder == true ? "Cartella già rimossa" : "\(missing.count) già rimossi") }
+        else if !removed.isEmpty { parts.append(removed.count == 1 ? "1 file deleted" : "\(StorageStyle.count(removed.count)) files deleted") }
+        if !missing.isEmpty { parts.append(missing.first?.isFolder == true ? "Folder already removed" : "\(StorageStyle.count(missing.count)) already removed") }
         if !failures.isEmpty {
-            let count = failures.count.formatted()
+            let count = StorageStyle.count(failures.count)
             switch method {
             case .trash:
-                parts.append(failures.first?.entry.isFolder == true ? "Cartella non spostata" :
-                    failures.count == 1 ? "1 file non spostato" : "\(count) file non spostati")
-            case .permanent: parts.append(failures.count == 1 ? "1 file non eliminato" : "\(count) file non eliminati")
+                parts.append(failures.first?.entry.isFolder == true ? "Folder could not be moved" :
+                    failures.count == 1 ? "1 file could not be moved" : "\(count) files could not be moved")
+            case .permanent: parts.append(failures.count == 1 ? "1 file could not be deleted" : "\(count) files could not be deleted")
             }
         }
         if let space { parts.append(space.message) }
@@ -191,10 +193,10 @@ final class DashboardModel {
     }
     var needsBackgroundApproval: Bool { wantsBackground && serviceStatus == .requiresApproval }
     var brokerStatus: String {
-        if backgroundRunning { return "Aggiornamento automatico" }
-        if state?.phase == .failed { return "Aggiornamenti in pausa" }
-        if state != nil { return "Aggiorna mentre l’app è aperta" }
-        return "Avvio dell’aggiornamento"
+        if backgroundRunning { return "Automatic Updates" }
+        if state?.phase == .failed { return "Updates Paused" }
+        if state != nil { return "Updates While Open" }
+        return "Starting Indexing"
     }
     var volumeSpace: VolumeSpace? {
         liveVolumeSpace ?? overview?.sample.map { VolumeSpace(capacity: $0.capacity, available: $0.available) }
@@ -237,7 +239,7 @@ final class DashboardModel {
     }
 
     var folderTitle: String {
-        if folder.path == folder.tree.root { return folder.tree == .data ? volumeName : "Sistema macOS" }
+        if folder.path == folder.tree.root { return folder.tree == .data ? volumeName : VolumeTree.systemDisplayName }
         return String(folder.path.split(separator: "/").last ?? "/")
     }
 
@@ -246,14 +248,14 @@ final class DashboardModel {
             return URL(fileURLWithPath: fixture).lastPathComponent
         }
         let values = try? URL(fileURLWithPath: "/").resourceValues(forKeys: [.volumeLocalizedNameKey])
-        return values?.volumeLocalizedName ?? "Disco di avvio"
+        return values?.volumeLocalizedName ?? "Startup Disk"
     }
 
     var folderTrail: [(String, EntryKey)] { trail(to: folder) }
 
     func trail(to key: EntryKey) -> [(String, EntryKey)] {
         let root = key.tree.root
-        let rootName = key.tree == .data ? volumeName : "Sistema macOS"
+        let rootName = key.tree == .data ? volumeName : VolumeTree.systemDisplayName
         var result = [(rootName, EntryKey(tree: key.tree, path: root))]
         let subpath = key.path.dropFirst(root.count)
         var path = root
@@ -748,7 +750,7 @@ final class DashboardModel {
         let sibling = Bundle.main.executableURL?.deletingLastPathComponent().appendingPathComponent("SpaceTrailBroker")
         let candidate = FileManager.default.isExecutableFile(atPath: embedded.path) ? embedded : sibling
         guard let candidate, FileManager.default.isExecutableFile(atPath: candidate.path) else {
-            connectionError = "Il broker non è presente nel pacchetto di SpaceTrail."
+            connectionError = "SpaceTrail could not find the broker in the app bundle."
             return
         }
         do {
@@ -806,8 +808,8 @@ final class DashboardModel {
         panel.resolvesAliases = false
         panel.canCreateDirectories = false
         panel.directoryURL = expected
-        panel.prompt = "Consenti anteprime"
-        panel.message = "Seleziona «\(expected.lastPathComponent)» per vedere le anteprime dei file al suo interno."
+        panel.prompt = "Allow Previews"
+        panel.message = "Select “\(expected.lastPathComponent)” to preview the files inside."
         let response: NSApplication.ModalResponse
         if let window = NSApp.keyWindow {
             response = await panel.beginSheetModal(for: window)
@@ -816,7 +818,7 @@ final class DashboardModel {
         }
         guard response == .OK, let url = panel.url else { return nil }
         guard SpaceTrailPaths.displayPath(url.standardizedFileURL.path) == expected.standardizedFileURL.path else {
-            return "Seleziona «\(expected.lastPathComponent)» per vedere le sue anteprime."
+            return "Select “\(expected.lastPathComponent)” to enable previews for that folder."
         }
         previewGrants[folder] = PreviewFolderGrant(url: url)
         return nil

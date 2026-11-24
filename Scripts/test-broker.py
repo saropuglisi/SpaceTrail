@@ -12,24 +12,28 @@ import tempfile
 import time
 
 
+RESUME_DOCUMENT = "Café Final.pdf"
+RESUME_DOCUMENT_MATCH = "caf AND afe AND pdf"
+
+
 def verify(broker, base):
     root = base / "root"
     support = root / "index"
     support.mkdir(parents=True)
-    (root / "lavori_%").mkdir()
-    (root / "destinazione").mkdir()
-    source = root / "lavori_%" / "partenza.txt"
+    (root / "work_%").mkdir()
+    (root / "destination").mkdir()
+    source = root / "work_%" / "start.txt"
     source.write_bytes(b"a" * 2048)
-    (root / "archivio.txt").write_bytes(b"b" * 128)
-    (root / "collegamento").symlink_to(root, target_is_directory=True)
-    hidden = root / "protetta"
+    (root / "archive.txt").write_bytes(b"b" * 128)
+    (root / "symlink").symlink_to(root, target_is_directory=True)
+    hidden = root / "protected"
     hidden.mkdir()
-    (hidden / "inaccessibile.txt").write_bytes(b"x" * 64)
+    (hidden / "inaccessible.txt").write_bytes(b"x" * 64)
     hidden.chmod(0)
-    app_data = root / "Users" / "Esempio" / "Library" / "Group Containers"
-    private_file = app_data / "com.example.test" / "documento.txt"
+    app_data = root / "Users" / "Example" / "Library" / "Group Containers"
+    private_file = app_data / "com.example.test" / "document.txt"
     private_file.parent.mkdir(parents=True)
-    private_file.write_text("Dati di prova")
+    private_file.write_text("Test data")
     signature = subprocess.run(["/usr/bin/codesign", "-dv", "--verbose=4", str(broker)],
                                capture_output=True, text=True).stderr
     local_build = "TeamIdentifier=not set" in signature
@@ -59,7 +63,7 @@ def verify(broker, base):
             except (sqlite3.Error, FileNotFoundError):
                 pass
             time.sleep(0.15)
-        info = status.read_text() if status.exists() else "nessuno stato"
+        info = status.read_text() if status.exists() else "No broker status"
         raise AssertionError(f"{description}: {info}")
 
     def start():
@@ -72,14 +76,14 @@ def verify(broker, base):
 
     process = start()
     try:
-        wait(lambda: json.loads(status.read_text())["phase"] == "monitoring", "prima scansione")
+        wait(lambda: json.loads(status.read_text())["phase"] == "monitoring", "first scan")
         assert row(source) == [(0, 2048, 1)], (source, query("SELECT path, kind, logical FROM entries"))
         assert row(source.parent) == [(1, 2048, 1)]
         assert query("""
             SELECT e.name FROM name_fts JOIN entries e ON e.rowid = name_fts.rowid
-            WHERE name_fts MATCH '"art" AND "ten"'
-            """) == [("partenza.txt",)]
-        assert row(root / "collegamento")[0][0] == 2
+            WHERE name_fts MATCH '"sta" AND "art"'
+            """) == [("start.txt",)]
+        assert row(root / "symlink")[0][0] == 2
         assert not row(support)
         assert query("SELECT path FROM gaps") == [(str(hidden),)]
         assert query("SELECT count(*) FROM samples") == [(1,)]
@@ -87,37 +91,37 @@ def verify(broker, base):
         if local_build:
             assert not row(private_file)
             assert query("SELECT path FROM limited_scopes") == [(str(app_data),)]
-            private_file.write_text("Dati di prova modificati")
-            public_file = root / "Users" / "Esempio" / "Library" / "indizio.txt"
+            private_file.write_text("Updated test data")
+            public_file = root / "Users" / "Example" / "Library" / "note.txt"
             public_file.write_bytes(b"abc")
-            wait(lambda: row(public_file) == [(0, 3, 1)], "aggiornamento accanto ai contenitori protetti")
+            wait(lambda: row(public_file) == [(0, 3, 1)], "updates alongside protected containers")
             assert not row(private_file)
 
         source.write_bytes(b"x" * 8192)
-        wait(lambda: row(source.parent) == [(1, 8192, 1)], "modifica e totali degli antenati")
-        wait(lambda: usage(source.parent) == [(8192, 0, 1, 0)], "spazio aggiornato con la sola attività del broker")
+        wait(lambda: row(source.parent) == [(1, 8192, 1)], "file modification and ancestor totals")
+        wait(lambda: usage(source.parent) == [(8192, 0, 1, 0)], "disk usage updates from the broker alone")
 
-        renamed = root / "destinazione" / "spostata"
+        renamed = root / "destination" / "moved"
         source.parent.rename(renamed)
         wait(lambda: not row(source.parent) and row(renamed) == [(1, 8192, 1)]
-             and row(renamed / source.name) == [(0, 8192, 1)], "rinomina e spostamento directory")
+             and row(renamed / source.name) == [(0, 8192, 1)], "directory rename and move")
 
-        moved_file = root / "rinominato.txt"
+        moved_file = root / "renamed.txt"
         (renamed / source.name).rename(moved_file)
         wait(lambda: row(moved_file) == [(0, 8192, 1)] and row(renamed) == [(1, 0, 0)],
-             "spostamento singolo file")
+             "single-file move")
 
         moved_file.unlink()
-        wait(lambda: not row(moved_file), "rimozione file")
-        assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'rin'") == [(0,)]
+        wait(lambda: not row(moved_file), "file removal")
+        assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'ren'") == [(0,)]
 
-        created = renamed / "nuovo.txt"
+        created = renamed / "new.txt"
         created.write_bytes(b"b" * 384)
-        wait(lambda: row(created) == [(0, 384, 1)], "creazione file")
+        wait(lambda: row(created) == [(0, 384, 1)], "file creation")
 
         hidden.chmod(0o700)
-        wait(lambda: row(hidden / "inaccessibile.txt") == [(0, 64, 1)]
-             and not query("SELECT path FROM gaps"), "recupero di una cartella diventata accessibile")
+        wait(lambda: row(hidden / "inaccessible.txt") == [(0, 64, 1)]
+             and not query("SELECT path FROM gaps"), "recovery of a newly accessible folder")
 
         checkpoint = int(query("SELECT value FROM meta WHERE key = 'event'")[0][0])
         assert checkpoint > 0
@@ -135,49 +139,49 @@ def verify(broker, base):
                 INSERT INTO parent_paths(tree, path) VALUES (1, '/'), (1, '/Users');
                 INSERT INTO entries(tree, path, parent, name, name_key, kind, logical, allocated,
                                     files, modified, created, inode, mode, links) VALUES
-                  (1, '/', NULL, 'Sistema', 'sistema', 1, 2048, 4096, 1, 0, 0, 2, 0, 1),
+                  (1, '/', NULL, 'System', 'system', 1, 2048, 4096, 1, 0, 0, 2, 0, 1),
                   (1, '/Users', (SELECT id FROM parent_paths WHERE tree=1 AND path='/'),
                    'Users', 'users', 1, 2048, 4096, 1, 0, 0, 3, 0, 1),
-                  (1, '/Users/archivio.txt', (SELECT id FROM parent_paths WHERE tree=1 AND path='/Users'),
-                   'archivio.txt', 'archivio.txt', 0, 2048, 4096, 1, 0, 0, 4, 0, 1);
+                  (1, '/Users/archive.txt', (SELECT id FROM parent_paths WHERE tree=1 AND path='/Users'),
+                   'archive.txt', 'archive.txt', 0, 2048, 4096, 1, 0, 0, 4, 0, 1);
                 """)
         created.unlink()
-        offline = renamed / "a-broker-chiuso.txt"
+        offline = renamed / "while-broker-stopped.txt"
         offline.write_bytes(b"z" * 768)
         time.sleep(3)
         process = start()
         wait(lambda: not row(created) and row(offline) == [(0, 768, 1)]
-             and row(renamed) == [(1, 768, 1)], "ripresa FSEvents dopo un arresto")
+             and row(renamed) == [(1, 768, 1)], "FSEvents resumption after shutdown")
 
         assert query("SELECT value FROM meta WHERE key = 'baselineAt'") == baseline
         assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'arc'") == [(1,)]
-        assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'uso'") == [(1,)]
+        assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'sto AND top'") == [(1,)]
         assert not row("/Users")
         assert row("/") == [(1, 0, 0)]
 
         # Journal replacement schedules bounded repair, preserving the baseline.
         stop(process)
-        physical = root / "fisico"
+        physical = root / "physical"
         physical.mkdir()
-        original = physical / "originale.bin"
+        original = physical / "original.bin"
         original.write_bytes(os.urandom(131_072))
         subprocess.run(["/bin/cp", "-c", str(original), str(physical / "clone.bin")], check=True)
         hardlink = physical / "hard.bin"
         hardlink.write_bytes(os.urandom(8_192))
-        peer = physical / "sottocartella"
+        peer = physical / "subfolder"
         peer.mkdir()
         (peer / "link.bin").hardlink_to(hardlink)
-        unique = physical / "unico.bin"
+        unique = physical / "unique.bin"
         unique.write_bytes(os.urandom(32_768))
         with sqlite3.connect(db) as connection:
             connection.execute("UPDATE meta SET value = 'old-journal' WHERE key = 'journal'")
         process = start()
-        wait(lambda: row(physical) == [(1, 311_296, 5)], "riconciliazione dopo cambio del journal")
+        wait(lambda: row(physical) == [(1, 311_296, 5)], "reconciliation after journal replacement")
 
         # Measurements arrive and stay available with the dashboard closed.
         expected = [(32_768, 139_264, 5, 0)]
         wait(lambda: usage(physical) == expected and usage(peer) == [(0, 8_192, 1, 0)],
-             "misura autonoma di cloni e hard link in più cartelle")
+             "background accounting for clones and hard links across folders")
         stop(process)
         assert usage(physical) == expected
         assert not (support / "footprint-request.json").exists()
@@ -185,17 +189,17 @@ def verify(broker, base):
         moved = peer / unique.name
         unique.rename(moved)
         wait(lambda: usage(peer) == [(32_768, 8_192, 2, 0)] and usage(physical) == expected,
-             "spostamento e stima di entrambe le cartelle")
+             "move and updated estimates for both folders")
         moved.unlink()
         wait(lambda: usage(physical) == [(0, 139_264, 4, 0)] and usage(peer) == [(0, 8_192, 1, 0)],
-             "rimozione e aggiornamento delle stime persistenti")
+             "removal and refreshed saved estimates")
 
-        direct = physical / "creato-in-background.bin"
+        direct = physical / "created-in-background.bin"
         direct.write_bytes(os.urandom(16_384))
-        wait(lambda: usage(physical) == [(16_384, 139_264, 5, 0)], "creazione del file ad app chiusa")
-        clone = peer / "clonato-in-background.bin"
+        wait(lambda: usage(physical) == [(16_384, 139_264, 5, 0)], "file creation with the app closed")
+        clone = peer / "cloned-in-background.bin"
         subprocess.run(["/bin/cp", "-c", str(direct), str(clone)], check=True)
-        wait(lambda: usage(physical) == [(0, 155_648, 6, 0)], "clone creato dopo la misura del suo originale")
+        wait(lambda: usage(physical) == [(0, 155_648, 6, 0)], "clone created after its source was measured")
         assert query("SELECT value FROM meta WHERE key = 'baselineAt'") == baseline
         assert query("SELECT count(*) FROM pending_repair") == [(0,)]
         assert query("PRAGMA quick_check") == [("ok",)]
@@ -252,7 +256,7 @@ def verify_resume(broker, base):
 
         # Mutations in a completed folder must be picked up by the saved FSEvents watermark.
         (root / "00" / "file-0.txt").unlink()
-        (root / "00" / "Caffè finale.pdf").write_bytes(b"payload")
+        (root / "00" / RESUME_DOCUMENT).write_bytes(b"payload")
         # A deletion in the in-flight directory must not survive a replay of that directory.
         (root / "01" / "file-0.txt").unlink()
         time.sleep(3)
@@ -269,7 +273,8 @@ def verify_resume(broker, base):
         with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as connection:
             assert connection.execute("SELECT count(*) FROM pending_scan").fetchone() == (0,)
             assert connection.execute("SELECT logical, files FROM entries WHERE parent IS NULL").fetchone() == (7, sum(group_sizes) - 1)
-            assert connection.execute("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'caf AND ffe AND pdf'").fetchone() == (1,)
+            assert connection.execute("SELECT count(*) FROM name_fts WHERE name_fts MATCH ?",
+                                      (RESUME_DOCUMENT_MATCH,)).fetchone() == (1,)
     finally:
         if process.poll() is None:
             process.terminate()
@@ -347,16 +352,16 @@ def verify_migration(broker, root, support, environment):
             assert connection.execute("SELECT * FROM samples WHERE date=?", sample[:1]).fetchone() == sample
             assert connection.execute("""
                 SELECT e.path FROM name_fts JOIN entries e ON e.rowid=name_fts.rowid
-                WHERE name_fts MATCH 'caf AND ffe AND pdf'
-                """).fetchall() == [(str(root / "00" / "Caffè finale.pdf"),)]
+                WHERE name_fts MATCH ?
+                """, (RESUME_DOCUMENT_MATCH,)).fetchall() == [(str(root / "00" / RESUME_DOCUMENT),)]
             assert connection.execute("""
                 SELECT count(*) FROM entries e LEFT JOIN parent_paths p ON p.id=e.parent
                 WHERE e.parent IS NOT NULL AND (p.id IS NULL OR p.tree <> e.tree)
                 """).fetchone() == (0,)
         assert database.stat().st_size < legacy_compact_bytes, (database.stat().st_size, legacy_compact_bytes)
-        print(f"Compattazione su fixture: {old_bytes:,} → {database.stat().st_size:,} byte "
-              f"(formato precedente già ricompattato: {legacy_compact_bytes:,} byte).")
-        added = root / "Caffè migrato.pdf"
+        print(f"Fixture compaction · {old_bytes:,} → {database.stat().st_size:,} bytes "
+              f"(compacted legacy format · {legacy_compact_bytes:,} bytes).")
+        added = root / "Café Migrated.pdf"
         added.write_bytes(b"abc")
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
@@ -369,7 +374,7 @@ def verify_migration(broker, root, support, environment):
                     break
             time.sleep(0.15)
         else:
-            raise AssertionError("FSEvents e ricerca dopo la migrazione")
+            raise AssertionError("FSEvents and search after migration")
     finally:
         if process.poll() is None:
             process.terminate()
@@ -385,4 +390,4 @@ if __name__ == "__main__":
         verify(executable, Path(directory).resolve())
     with tempfile.TemporaryDirectory(prefix="spacetrail-resume-") as directory:
         verify_resume(executable, Path(directory).resolve())
-    print("Scansione, ricerca, cloni APFS, FSEvents, ripresa e migrazione SQLite verificati.")
+    print("Verified scanning, search, APFS clones, FSEvents, resumption, and SQLite migration.")

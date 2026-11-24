@@ -51,9 +51,9 @@ struct StorageMapView: View {
             } else if let snapshot, snapshot.folder == request.folder {
                 if let loadError {
                     HStack {
-                        Label("Ultima mappa disponibile", systemImage: "exclamationmark.circle")
+                        Label("Last Saved Map", systemImage: "exclamationmark.circle")
                         Spacer()
-                        Button("Riprova") { retry += 1 }
+                        Button("Retry") { retry += 1 }
                     }
                     .font(.callout)
                     .help(loadError)
@@ -61,14 +61,14 @@ struct StorageMapView: View {
                 contents(snapshot.page)
             } else if let loadError {
                 ContentUnavailableView {
-                    Label("Mappa non disponibile", systemImage: "exclamationmark.circle")
+                    Label("Map Unavailable", systemImage: "exclamationmark.circle")
                 } description: {
-                    Text("Riprova a leggere l’indice.")
+                    Text("Retry loading the index.")
                 } actions: {
-                    Button("Riprova") { retry += 1 }.help(loadError)
+                    Button("Retry") { retry += 1 }.help(loadError)
                 }
             } else {
-                ProgressView("Caricamento mappa")
+                ProgressView("Loading Map…")
                     .controlSize(.small)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -92,25 +92,25 @@ struct StorageMapView: View {
     private var navigation: some View {
         let trail = model.trail(to: model.mapFolder)
         let previous = trail.dropLast().last?.1
-        let name = model.mapFolder == SpaceTrailPaths.personalFolder ? "Cartella personale" : trail.last?.0 ?? model.volumeName
+        let name = model.mapFolder == SpaceTrailPaths.personalFolder ? "Home Folder" : trail.last?.0 ?? model.volumeName
         return HStack(spacing: 9) {
             Button {
                 if let previous { model.openMap(previous) }
             } label: {
-                Label("Cartella superiore", systemImage: "chevron.up").labelStyle(.iconOnly)
+                Label("Parent Folder", systemImage: "chevron.up").labelStyle(.iconOnly)
             }
             .disabled(previous == nil)
-            .help("Risali di un livello")
+            .help("Go Up One Level")
 
             Menu {
                 Button(model.volumeName) {
                     model.openMap(EntryKey(tree: .data, path: VolumeTree.data.root))
                 }
                 if let home = SpaceTrailPaths.personalFolder {
-                    Button("Cartella personale") { model.openMap(home) }
+                    Button("Home Folder") { model.openMap(home) }
                 }
                 if !model.isFixture {
-                    Button("Sistema macOS") { model.openMap(EntryKey(tree: .system, path: "/")) }
+                    Button(VolumeTree.systemDisplayName) { model.openMap(EntryKey(tree: .system, path: "/")) }
                 }
                 if trail.count > 2 {
                     Divider()
@@ -119,10 +119,10 @@ struct StorageMapView: View {
                     }
                 }
             } label: {
-                Label("Posizione", systemImage: "folder")
+                Label("Location", systemImage: "folder")
             }
             .fixedSize()
-            .help("Scegli il percorso da rappresentare")
+            .help("Choose a location to show in the map")
 
             Text(name)
                 .font(.callout.weight(.semibold))
@@ -132,17 +132,17 @@ struct StorageMapView: View {
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityFocused($locationFocused)
             Spacer(minLength: 8)
-            Picker("Area dei riquadri", selection: $proportionalArea) {
-                Text("Area bilanciata").tag(false)
-                Text("Area proporzionale").tag(true)
+            Picker("Tile Size", selection: $proportionalArea) {
+                Text("Balanced Area").tag(false)
+                Text("Proportional Area").tag(true)
             }
             .labelsHidden()
             .fixedSize()
-            .help("La vista bilanciata distribuisce un quinto dell’area per rendere visibili le voci piccole.")
+            .help("Balanced view spreads a fifth of the available area evenly so smaller items remain visible.")
             Button {
                 model.openFolder(model.mapFolder)
             } label: {
-                Label("Apri in Cartelle", systemImage: "list.bullet")
+                Label("Open in Folders", systemImage: "list.bullet")
             }
             .fixedSize()
         }
@@ -153,8 +153,8 @@ struct StorageMapView: View {
     private func contents(_ page: MapPage) -> some View {
         let rows = page.contents.rows.filter { !model.hidesRemovedEntry($0) }
         if rows.isEmpty {
-            ContentUnavailableView("Nessun elemento in mappa", systemImage: "folder",
-                                   description: Text("Qui non risultano elementi indicizzati."))
+            ContentUnavailableView("No Items to Map", systemImage: "folder",
+                                   description: Text("The index has no items at this location."))
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             let largest = rows.map { mapUsage($0).bytes ?? 0 }.max() ?? 0
@@ -219,8 +219,8 @@ struct StorageMapView: View {
         let tiles = items.filter { $0.bytes > 0 }
         return VStack(alignment: .leading, spacing: 8) {
             if tiles.isEmpty {
-                ContentUnavailableView("Nessun riquadro ancora", systemImage: "square.split.2x2",
-                                       description: Text("La mappa mostra gli elementi con una misura su disco positiva."))
+                ContentUnavailableView("No Measured Items Yet", systemImage: "square.split.2x2",
+                                       description: Text("Items appear here when SpaceTrail measures their disk usage."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(.quaternary.opacity(0.30), in: RoundedRectangle(cornerRadius: 9))
             } else {
@@ -246,26 +246,26 @@ struct StorageMapView: View {
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 9))
                     .accessibilityElement(children: .contain)
-                    .accessibilityLabel("Mappa dello spazio su disco")
+                    .accessibilityLabel("Disk Usage Map")
                 }
             }
             HStack(spacing: 9) {
                 HStack(spacing: 6) {
-                    Text("Più leggero")
+                    Text("Smaller")
                     Capsule().fill(LinearGradient(
                         colors: Self.tones.map { Color(red: $0.x, green: $0.y, blue: $0.z) },
                         startPoint: .leading, endPoint: .trailing
                     ))
                     .frame(width: 49, height: 6)
                     .accessibilityHidden(true)
-                    Text("Più pesante")
+                    Text("Larger")
                 }
-                .help("Il colore confronta la misura su disco con la voce più pesante di questa mappa.")
+                .help("Color shows disk usage relative to the largest item on this map.")
                 .accessibilityElement(children: .ignore)
-                .accessibilityLabel("I colori vanno dal blu per le voci leggere al rame per quelle pesanti")
+                .accessibilityLabel("Colors range from blue for smaller items to copper for larger items")
                 Spacer(minLength: 0)
-                Text("≈ Stima  ·  ≥ Almeno")
-                    .help("Le cifre mostrano la misura su disco. Nei riquadri grandi vedi le voci principali della cartella.")
+                Text("≈ Estimate  ·  ≥ At Least")
+                    .help("Values show disk usage. Large tiles also show the largest items in their folders.")
             }
             .font(.caption)
             .foregroundStyle(.secondary)
@@ -369,32 +369,32 @@ struct StorageMapView: View {
                 HStack(spacing: 6) {
                     DiskUsageLabel(usage: item.usage).font(.callout.weight(.medium))
                     if model.indexAccess?.includes(item.id) == false {
-                        Label("Dati salvati", systemImage: "lock")
+                        Label("Saved Data", systemImage: "lock")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else if FileDeletion.isProtected(item.id) {
-                        Label("Posizione protetta", systemImage: "lock")
+                        Label("Protected Location", systemImage: "lock")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                 }
                 HStack(spacing: 8) {
                     if item.entry.isFolder {
-                        Button("Esplora cartella") { model.openMap(item.id) }
+                        Button("Explore Folder") { model.openMap(item.id) }
                             .keyboardShortcut(.return, modifiers: [])
                     } else if let url = model.previewURL(for: item.entry) {
-                        Button("Anteprima") { preview = url }
+                        Button("Preview") { preview = url }
                             .keyboardShortcut(.space, modifiers: [])
                     }
                     Menu { actions(for: item) } label: {
-                        Label("Azioni", systemImage: "ellipsis.circle").labelStyle(.iconOnly)
+                        Label("Actions", systemImage: "ellipsis.circle").labelStyle(.iconOnly)
                     }
                     .fixedSize()
-                    .help("Azioni per \(item.entry.name)")
+                    .help("Actions for \(item.entry.name)")
                 }
                 .controlSize(.small)
             } else {
-                Text("Seleziona un elemento per vedere i dettagli.")
+                Text("Select an item to see its details.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -405,18 +405,18 @@ struct StorageMapView: View {
     @ViewBuilder
     private func actions(for item: MapItem) -> some View {
         if item.entry.isFolder {
-            Button("Esplora in Mappa") { model.openMap(item.id) }
-            Button("Apri in Cartelle") { model.openFolder(item.id) }
-            Button("Apri nel Finder") { model.openFolderInFinder(item.id) }
+            Button("Explore in Map") { model.openMap(item.id) }
+            Button("Open in Folders") { model.openFolder(item.id) }
+            Button("Open in Finder") { model.openFolderInFinder(item.id) }
         } else {
-            if let url = model.previewURL(for: item.entry) { Button("Anteprima") { preview = url } }
-            Button("Mostra nel Finder") { model.reveal(item.id) }
+            if let url = model.previewURL(for: item.entry) { Button("Preview") { preview = url } }
+            Button("Show in Finder") { model.reveal(item.id) }
         }
-        Button("Copia percorso") { copyEntryPath(item.entry) }
+        Button("Copy Path") { copyEntryPath(item.entry) }
         if FileDeletion.canMoveToTrash(item.entry, access: .complete) {
             let source = RemovalSource.map(model.mapFolder)
             Divider()
-            Button("Sposta nel Cestino", role: .destructive) {
+            Button("Move to Trash", role: .destructive) {
                 Task {
                     await model.remove([item.entry], by: .trash, from: source)
                     if model.hidesRemovedEntry(item.entry) && selection == item.id { selection = nil }
@@ -428,7 +428,7 @@ struct StorageMapView: View {
 
     private func ranking(_ items: [MapItem], active: MapItem?, hasMore: Bool) -> some View {
         LazyVStack(alignment: .leading, spacing: 0) {
-            Text(hasMore ? "Elementi più grandi" : "In questa cartella")
+            Text(hasMore ? "Largest Items" : "In This Folder")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
                 .padding(.bottom, 6)

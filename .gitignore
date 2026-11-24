@@ -1,4 +1,4 @@
-# Build e configurazioni locali
+# Builds and local configuration
 /.build/
 /.swiftpm/
 /dist/
@@ -6,7 +6,7 @@
 xcuserdata/
 .DS_Store
 
-# Indici e dati di esecuzione
+# Indexes and runtime data
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

@@ -6,9 +6,15 @@ enum StorageStyle {
     static let accent = Color(hue: 0.66, saturation: 0.62, brightness: 0.86)
     static let inset: CGFloat = 22
     static let gap: CGFloat = 12
+    static let locale = Locale(identifier: "en")
+    static let dateAndTime = Date.FormatStyle(date: .abbreviated, time: .shortened).locale(locale)
 
     static func size(_ bytes: Int64) -> String {
-        bytes == 0 ? "0 byte" : ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
+        bytes == 0 ? "0 bytes" : bytes.formatted(.byteCount(style: .file).locale(locale))
+    }
+
+    static func count<T: BinaryInteger>(_ number: T) -> String {
+        number.formatted(IntegerFormatStyle<T>(locale: locale))
     }
 
     static func location(_ path: String) -> String {
@@ -19,7 +25,7 @@ enum StorageStyle {
     }
 
     static func exactSize(_ bytes: Int64) -> String {
-        "\(bytes.formatted()) byte"
+        bytes == 1 ? "1 byte" : "\(count(bytes)) bytes"
     }
 }
 
@@ -76,30 +82,30 @@ struct DashboardView: View {
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button { model.step(.back) } label: {
-                    Label("Indietro", systemImage: "chevron.left")
+                    Label("Back", systemImage: "chevron.left")
                 }
                 .disabled(!model.canStep(.back))
                 .keyboardShortcut("[", modifiers: .command)
-                .help("Indietro (⌘[)")
+                .help("Back (⌘[)")
                 Button { model.step(.forward) } label: {
-                    Label("Avanti", systemImage: "chevron.right")
+                    Label("Forward", systemImage: "chevron.right")
                 }
                 .disabled(!model.canStep(.forward))
                 .keyboardShortcut("]", modifiers: .command)
-                .help("Avanti (⌘])")
+                .help("Forward (⌘])")
             }
             ToolbarItem(placement: .primaryAction) {
                 Button { model.showSearch() } label: {
-                    Label("Cerca nel disco", systemImage: "magnifyingglass")
+                    Label("Search Disk", systemImage: "magnifyingglass")
                 }
                 .keyboardShortcut("f", modifiers: .command)
-                .help("Cerca nel disco (⌘F)")
+                .help("Search Disk (⌘F)")
             }
             ToolbarItem(placement: .primaryAction) {
                 SettingsLink {
-                    Label("Impostazioni", systemImage: "gearshape")
+                    Label("Settings", systemImage: "gearshape")
                 }
-                .help("Impostazioni")
+                .help("Settings")
             }
         }
         .task(id: model.activeSection == .space) { await model.watch() }
@@ -133,24 +139,24 @@ struct DashboardView: View {
         switch model.activeSection {
         case .files:
             if let overview = model.overview {
-                return overview.indexedFiles == 1 ? "1 elemento indicizzato" :
-                    "\(overview.indexedFiles.formatted()) elementi indicizzati"
+                return overview.indexedFiles == 1 ? "1 item indexed" :
+                    "\(StorageStyle.count(overview.indexedFiles)) items indexed"
             }
-            return "Tutti i file del disco, in un unico elenco."
+            return "Browse all indexed files."
         case .folders:
             if let folder = model.folderInfo {
-                let count = folder.files == 1 ? "1 elemento" : "\(folder.files.formatted()) elementi"
+                let count = folder.files == 1 ? "1 item" : "\(StorageStyle.count(folder.files)) items"
                 guard folder.id.path != folder.id.tree.root else { return count }
                 let usage = model.diskUsage(for: folder)
-                return count + "  ·  " + (usage.hasSize ? "\(usage.accessibleText) su disco" : usage.accessibleText)
+                return count + "  ·  " + (usage.hasSize ? "\(usage.accessibleText) on disk" : usage.accessibleText)
             }
-            return "Sfoglia il disco e confronta il peso delle cartelle."
+            return "Browse your disk and compare folder sizes."
         case .search:
-            return "Trova file e cartelle in tutto l’indice."
+            return "Find files and folders across the index."
         case .map:
-            return "Esplora i file e le sottocartelle che occupano più spazio."
+            return "Explore the files and folders that take up the most space."
         case .space:
-            return "Capacità, andamento e contenuti che occupano più spazio."
+            return "See disk capacity, usage history, and the largest items."
         }
     }
 
@@ -166,8 +172,8 @@ struct DashboardView: View {
             if let space = model.volumeSpace, space.capacity > 0 {
                 ProgressView(value: min(Double(space.used), Double(space.capacity)), total: Double(space.capacity))
                     .tint(StorageStyle.accent)
-                    .accessibilityLabel("Spazio utilizzato")
-                Text("\(StorageStyle.size(space.available)) liberi")
+                    .accessibilityLabel("Space Used")
+                Text("\(StorageStyle.size(space.available)) free")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -183,40 +189,40 @@ struct DashboardView: View {
     private var statusBanner: AnyView? {
         if let error = model.connectionError ?? model.brokerProblem {
             if model.overview != nil {
-                return AnyView(banner("Aggiornamenti in pausa", detail: "Puoi consultare l’ultimo indice salvato.", icon: "pause.circle") {
-                    Button("Riprova") { model.requestCheck() }
+                return AnyView(banner("Updates Paused", detail: "Browse the last saved index.", icon: "pause.circle") {
+                    Button("Retry") { model.requestCheck() }
                         .help(error)
                 })
             }
-            return AnyView(banner("Indice non disponibile", detail: error, icon: "exclamationmark.triangle") {
-                Button("Riprova") { model.requestCheck() }
+            return AnyView(banner("Index Unavailable", detail: error, icon: "exclamationmark.triangle") {
+                Button("Retry") { model.requestCheck() }
             })
         }
         if model.needsBackgroundApproval {
-            return AnyView(banner("Aggiornamento ad app chiusa", detail: "macOS richiede un’autorizzazione.", icon: "clock.arrow.circlepath") {
-                Button("Apri Impostazioni") { model.openBackgroundSettings() }
+            return AnyView(banner("Background Updates", detail: "macOS requires your approval.", icon: "clock.arrow.circlepath") {
+                Button("Open Settings") { model.openBackgroundSettings() }
             })
         }
         if model.overview == nil { return nil }
         if model.state?.phase == .compacting {
-            return AnyView(banner("Ottimizzazione dell’indice", detail: "Puoi continuare a consultare i risultati.", icon: "internaldrive") {
+            return AnyView(banner("Optimizing Index", detail: "You can still browse indexed items.", icon: "internaldrive") {
                 EmptyView()
             })
         }
         if model.indexAccess == .limited {
-            return AnyView(banner("Accesso limitato", detail: "Per le cartelle protette vedi gli ultimi dati salvati.", icon: "lock") {
-                SettingsLink { Text("Accesso") }
+            return AnyView(banner("Limited Access", detail: "Protected folders show the last saved data.", icon: "lock") {
+                SettingsLink { Text("Access") }
             })
         }
         if model.state?.phase == .recovering {
-            return AnyView(banner("Aggiornamento dell’indice", detail: "Puoi consultare i risultati già indicizzati.", icon: "arrow.trianglehead.clockwise") {
+            return AnyView(banner("Updating Index", detail: "You can browse previously indexed items.", icon: "arrow.trianglehead.clockwise") {
                 EmptyView()
             })
         }
         if let gaps = model.overview?.gaps, gaps > 0 {
-            let detail = gaps == 1 ? "1 percorso da verificare" : "\(gaps.formatted()) percorsi da verificare"
-            return AnyView(banner("Copertura parziale", detail: detail, icon: "lock") {
-                SettingsLink { Text("Accesso") }
+            let detail = gaps == 1 ? "1 location to check" : "\(StorageStyle.count(gaps)) locations to check"
+            return AnyView(banner("Partial Coverage", detail: detail, icon: "lock") {
+                SettingsLink { Text("Access") }
             })
         }
         return nil
@@ -262,25 +268,25 @@ struct IndexPlaceholder: View {
             Label(title, systemImage: hasError ? "internaldrive.badge.exclamationmark" : "internaldrive")
         } description: {
             if hasError {
-                Text("Riprova per avviare la lettura del disco.")
+                Text("Retry to start scanning the disk.")
             } else if state?.phase == .compacting {
-                Text("SpaceTrail sta riducendo lo spazio usato dall’indice.")
+                Text("SpaceTrail is reducing the disk space used by the index.")
             } else if state?.phase == .finishing {
-                Text("SpaceTrail sta completando l’indice di ricerca.")
+                Text("SpaceTrail is finishing the search index.")
             } else if let state, state.processed > 0 {
-                Text("\(state.processed.formatted()) elementi esaminati")
+                Text(state.processed == 1 ? "1 item scanned" : "\(StorageStyle.count(state.processed)) items scanned")
                     .monospacedDigit()
             } else {
-                Text("I risultati appariranno qui al termine della lettura del disco.")
+                Text("Results will appear here after the scan.")
             }
         } actions: {
             if !hasError {
                 if let fraction = state?.fraction {
                     VStack(spacing: 7) {
                         ProgressView(value: fraction)
-                            .accessibilityLabel("Avanzamento stimato")
+                            .accessibilityLabel("Estimated Progress")
                         HStack {
-                            Text("\(Int(fraction * 100))% circa")
+                            Text("About \(Int(fraction * 100))%")
                             Spacer()
                             Text(estimate)
                         }
@@ -289,29 +295,32 @@ struct IndexPlaceholder: View {
                     }
                     .frame(width: 260)
                 } else {
-                    ProgressView().controlSize(.small).accessibilityLabel("Indicizzazione in corso")
+                    ProgressView().controlSize(.small).accessibilityLabel("Indexing in Progress")
                 }
             }
         }
     }
 
     private var title: String {
-        if hasError { return "Indice in attesa" }
-        if state?.phase == .compacting { return "Ottimizzazione dell’indice" }
-        if state?.phase == .finishing { return "Preparazione dei risultati" }
-        return state?.resumed == true ? "Indicizzazione ripresa" : "Prima indicizzazione"
+        if hasError { return "Waiting to Index" }
+        if state?.phase == .compacting { return "Optimizing Index" }
+        if state?.phase == .finishing { return "Preparing Results" }
+        return state?.resumed == true ? "Resuming Indexing" : "First Scan"
     }
 
     private var estimate: String {
         guard let remaining = state?.secondsRemaining else {
-            return (state?.fraction ?? 0) >= 0.99 ? "Stima in aggiornamento" : "Calcolo del tempo…"
+            return (state?.fraction ?? 0) >= 0.99 ? "Updating Estimate" : "Estimating Time…"
         }
-        if remaining < 60 { return "Meno di 1 min" }
+        if remaining < 60 { return "Less than 1 min" }
         let formatter = DateComponentsFormatter()
+        var calendar = Calendar.current
+        calendar.locale = StorageStyle.locale
+        formatter.calendar = calendar
         formatter.allowedUnits = [.hour, .minute]
         formatter.maximumUnitCount = 2
         formatter.unitsStyle = .abbreviated
         let rounded = (remaining / 60).rounded(.up) * 60
-        return formatter.string(from: rounded).map { "Circa \($0) rimanenti" } ?? "Calcolo del tempo…"
+        return formatter.string(from: rounded).map { "About \($0) left" } ?? "Estimating Time…"
     }
 }

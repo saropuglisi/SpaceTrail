@@ -12,9 +12,9 @@ struct DeletionSpace: Identifiable, Equatable, Sendable {
     let bytes: Int64?
 
     var message: String {
-        guard let bytes else { return "Spazio liberato non rilevabile" }
-        if bytes == 0 { return "Nessun aumento dello spazio libero" }
-        return "\(StorageStyle.size(bytes)) di spazio liberato"
+        guard let bytes else { return "Freed space could not be measured" }
+        if bytes == 0 { return "Free space did not increase" }
+        return "\(StorageStyle.size(bytes)) freed"
     }
 }
 
@@ -44,11 +44,11 @@ struct ConfirmDeletionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(entries.count == 1 ? "Eliminare definitivamente questo file?" :
-                    "Eliminare definitivamente \(entries.count.formatted()) file?")
+            Text(entries.count == 1 ? "Permanently delete this file?" :
+                    "Permanently delete \(StorageStyle.count(entries.count)) files?")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            Text("L’eliminazione è immediata e irreversibile.")
+            Text("This permanently removes the selected files.")
                 .foregroundStyle(.secondary)
             List(entries) { entry in
                 VStack(alignment: .leading, spacing: 3) {
@@ -61,12 +61,12 @@ struct ConfirmDeletionView: View {
             }
             .listStyle(.inset)
             .frame(height: min(224, CGFloat(entries.count) * 44 + 22))
-            .accessibilityLabel("File da eliminare")
+            .accessibilityLabel("Files to Delete")
             HStack(spacing: 8) {
                 Spacer()
-                Button("Annulla", role: .cancel) { dismiss() }
+                Button("Cancel", role: .cancel) { dismiss() }
                     .keyboardShortcut(.defaultAction)
-                Button("Elimina definitivamente", role: .destructive, action: confirm)
+                Button("Delete Permanently", role: .destructive, action: confirm)
             }
         }
         .padding(20)
@@ -94,7 +94,7 @@ struct DeletionFailuresView: View {
             }
             .listStyle(.inset)
             .frame(height: min(280, CGFloat(report.failures.count) * 75 + 16))
-            Button("Chiudi") { dismiss() }
+            Button("Close") { dismiss() }
                 .keyboardShortcut(.defaultAction)
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
@@ -117,21 +117,21 @@ struct DeletionStatusView: View {
                 VStack(alignment: .leading, spacing: 3) {
                     Label(report.summary, systemImage: report.failures.isEmpty ? "checkmark.circle" : "exclamationmark.circle")
                     if report.hasItemsInTrash {
-                        Text("Gli elementi occupano spazio finché restano nel Cestino.")
+                        Text("Items still take up space in the Trash.")
                             .font(.caption)
                     }
                 }
                 .accessibilityElement(children: .combine)
                 Spacer(minLength: 0)
                 if report.hasItemsInTrash {
-                    Button("Apri Cestino") { NSWorkspace.shared.open(FileDeletion.trashDirectory) }
+                    Button("Open Trash") { NSWorkspace.shared.open(FileDeletion.trashDirectory) }
                         .fixedSize()
                 }
                 if !report.failures.isEmpty {
-                    Button("Mostra errori") { showsFailures = true }
+                    Button("Show Errors") { showsFailures = true }
                 }
                 Button { model.deletionReport = nil } label: {
-                    Label("Chiudi esito", systemImage: "xmark").labelStyle(.iconOnly)
+                    Label("Dismiss Result", systemImage: "xmark").labelStyle(.iconOnly)
                 }
             }
         }

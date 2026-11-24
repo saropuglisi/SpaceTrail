@@ -19,10 +19,11 @@ let entryColumns = "tree, path, parent, name, name_key, kind, logical, allocated
 
 func indexEntry(_ row: OpaquePointer) -> StorageEntry {
     let path = sqlText(row, 1) ?? ""
+    let tree = VolumeTree(rawValue: sqlInt(row, 0)) ?? .data
     return StorageEntry(
-        id: EntryKey(tree: VolumeTree(rawValue: sqlInt(row, 0)) ?? .data, path: path),
+        id: EntryKey(tree: tree, path: path),
         parent: sqlite3_column_type(row, 2) == SQLITE_NULL ? nil : parentPath(path),
-        name: sqlText(row, 3) ?? "",
+        name: tree == .system && path == tree.root ? VolumeTree.systemDisplayName : sqlText(row, 3) ?? "",
         kind: EntryKind(rawValue: sqlInt(row, 5)) ?? .other,
         logical: sqlInt(row, 6),
         allocated: sqlInt(row, 7),
@@ -89,7 +90,7 @@ final class IndexWriter {
         let newIndex = try db.integer("SELECT count(*) FROM sqlite_schema WHERE name = 'entries'") == 0
         let version = try db.integer("PRAGMA user_version")
         guard version <= Self.schemaVersion else {
-            throw SQLiteFailure(code: SQLITE_ERROR, operation: "versione", message: "L’indice richiede una versione più recente di SpaceTrail.")
+            throw SQLiteFailure(code: SQLITE_ERROR, operation: "version", message: "This index requires a newer version of SpaceTrail.")
         }
         compactParents = newIndex || version == Self.schemaVersion
         if newIndex { try db.run("PRAGMA auto_vacuum = INCREMENTAL") }
@@ -185,7 +186,7 @@ final class IndexWriter {
     func checkDiskSpace() throws {
         let available = try mountInfo(support.path).available
         guard available >= Self.reserve else {
-            throw SQLiteFailure(code: SQLITE_FULL, operation: "indicizzazione", message: "Spazio insufficiente")
+            throw SQLiteFailure(code: SQLITE_FULL, operation: "indexing", message: "Insufficient disk space")
         }
     }
 

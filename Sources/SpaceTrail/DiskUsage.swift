@@ -10,18 +10,18 @@ enum DiskUsage {
         switch self {
         case .allocated(let bytes): return StorageStyle.size(bytes)
         case .estimate(let result, _): return (result.incomplete ? "≥ " : "≈ ") + StorageStyle.size(result.bytes)
-        case .verifying: return "In verifica"
-        case .protected: return "Protetta"
-        case .unavailable: return "Non disponibile"
+        case .verifying: return "Measuring…"
+        case .protected: return "Protected"
+        case .unavailable: return "Unavailable"
         }
     }
 
     var accessibleText: String {
         switch self {
         case .estimate(let result, _):
-            return (result.incomplete ? "Almeno " : "Circa ") + StorageStyle.size(result.bytes)
-        case .verifying: return "SpaceTrail sta verificando lo spazio in background"
-        case .protected: return "Cartella protetta da macOS"
+            return (result.incomplete ? "At least " : "About ") + StorageStyle.size(result.bytes)
+        case .verifying: return "SpaceTrail is measuring disk usage in the background"
+        case .protected: return "Folder protected by macOS"
         default: return text
         }
     }
@@ -29,16 +29,16 @@ enum DiskUsage {
     var explanation: String {
         switch self {
         case .allocated(let bytes):
-            return "\(StorageStyle.exactSize(bytes)) allocati al file, inclusi eventuali blocchi condivisi."
+            return "\(StorageStyle.exactSize(bytes)) allocated to this file, including any shared blocks."
         case .estimate(let result, let files):
             let bytes = StorageStyle.exactSize(result.bytes)
             if result.scannedFiles < files {
-                return "Almeno \(bytes). Verificati \(result.scannedFiles.formatted()) di \(files.formatted()) elementi."
+                return "At least \(bytes). Measured \(StorageStyle.count(result.scannedFiles)) of \(StorageStyle.count(files)) items."
             }
-            return result.incomplete ? "Almeno \(bytes). Alcuni blocchi o percorsi non sono misurabili." : "Circa \(bytes)."
-        case .verifying: return "SpaceTrail verifica lo spazio in background, anche ad app chiusa."
-        case .protected: return "L’accesso al percorso è limitato. La dimensione logica resta visibile per gli elementi già indicizzati."
-        case .unavailable: return "SpaceTrail non dispone ancora di una misura utilizzabile."
+            return result.incomplete ? "At least \(bytes). Some blocks or paths could not be measured." : "About \(bytes)."
+        case .verifying: return "SpaceTrail measures disk usage in the background, even after you close the app."
+        case .protected: return "Access to this location is limited. You can still see the logical size of previously indexed items."
+        case .unavailable: return "SpaceTrail has yet to measure this item."
         }
     }
 

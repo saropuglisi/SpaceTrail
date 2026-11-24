@@ -388,7 +388,7 @@ final class FileScanner {
         let sizes = kind == .directory
             ? contents
             : Totals(logical: max(0, info.st_size), allocated: max(0, info.st_blocks) * 512, files: 1)
-        let name = root && key.path == "/" ? "Sistema macOS" : String(key.path.split(separator: "/").last ?? "/")
+        let name = root && key.tree == .system ? VolumeTree.systemDisplayName : String(key.path.split(separator: "/").last ?? "/")
         return StorageEntry(
             id: key, parent: root ? nil : parentPath(key.path), name: name, kind: kind,
             logical: sizes.logical, allocated: sizes.allocated, files: sizes.files,

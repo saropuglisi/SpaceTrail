@@ -155,12 +155,12 @@ enum IndexMigration {
     private static func closeJournal(at url: URL) throws {
         let db = try SQLiteConnection(url, readOnly: false)
         guard try db.text("PRAGMA journal_mode = DELETE") == "delete" else {
-            throw SQLiteFailure(code: SQLITE_BUSY, operation: "compattazione", message: "L’indice è ancora in uso.")
+            throw SQLiteFailure(code: SQLITE_BUSY, operation: "compaction", message: "The index is still in use.")
         }
     }
 
     private static func invalidCopy() -> SQLiteFailure {
-        SQLiteFailure(code: SQLITE_CORRUPT, operation: "compattazione", message: "Verifica della copia dell’indice non riuscita.")
+        SQLiteFailure(code: SQLITE_CORRUPT, operation: "compaction", message: "The index copy failed verification.")
     }
 
     private static func stagingDirectory(in support: URL) -> URL {

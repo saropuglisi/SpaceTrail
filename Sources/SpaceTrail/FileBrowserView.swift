@@ -10,9 +10,9 @@ private enum BrowserLayout: String, CaseIterable, Identifiable {
 
     var title: String {
         switch self {
-        case .list: return "Elenco"
-        case .compact: return "Compatta"
-        case .grid: return "Griglia"
+        case .list: return "List"
+        case .compact: return "Compact"
+        case .grid: return "Grid"
         }
     }
 
@@ -28,10 +28,10 @@ private enum BrowserLayout: String, CaseIterable, Identifiable {
 private extension EntrySort {
     var title: String {
         switch self {
-        case .name: return "Nome"
-        case .logical: return "Dimensione logica"
-        case .allocated: return "Spazio su disco"
-        case .modified: return "Modificato"
+        case .name: return "Name"
+        case .logical: return "Logical Size"
+        case .allocated: return "Disk Usage"
+        case .modified: return "Modified"
         }
     }
 
@@ -130,8 +130,8 @@ struct FileBrowserView: View {
     }
 
     private var scopeLabel: String {
-        if global { return "Risultati della ricerca" }
-        return folders ? "Contenuto cartella" : "Tutti i file"
+        if global { return "Search Results" }
+        return folders ? "Folder Contents" : "All Files"
     }
 
     var body: some View {
@@ -161,7 +161,7 @@ struct FileBrowserView: View {
             else { searchFocused = false }
         }
         .quickLookPreview($previewURL)
-        .alert("Anteprime", isPresented: $showsPreviewAccessError, presenting: previewAccessError) { _ in
+        .alert("Previews", isPresented: $showsPreviewAccessError, presenting: previewAccessError) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in Text(message) }
         .sheet(item: $deletion) { selection in
@@ -174,11 +174,11 @@ struct FileBrowserView: View {
 
     private var previewAccessNotice: some View {
         HStack(spacing: 9) {
-            Label("Anteprime protette da macOS", systemImage: "lock")
+            Label("Previews Require Folder Access", systemImage: "lock")
                 .foregroundStyle(.secondary)
             Spacer(minLength: 8)
-            Button("Consenti anteprime…") { requestPreviews(in: model.folder) }
-                .help("Scegli questa cartella per mostrare le anteprime dei suoi file")
+            Button("Allow Previews…") { requestPreviews(in: model.folder) }
+                .help("Select this folder to show previews of its files")
         }
         .font(.callout)
         .controlSize(.small)
@@ -253,28 +253,28 @@ struct FileBrowserView: View {
                 IndexPlaceholder(state: model.state, hasError: model.connectionError != nil || model.brokerProblem != nil)
                     .padding(16)
             } else if global && model.submittedSearch.isEmpty {
-                ContentUnavailableView("Cerca nel disco", systemImage: "magnifyingglass",
-                                       description: Text("Scrivi un nome o un’estensione, poi premi Invio."))
+                ContentUnavailableView("Search Disk", systemImage: "magnifyingglass",
+                                       description: Text("Enter a name or extension, then press Return."))
             } else if let error = model.browseError {
                 if global {
                     ContentUnavailableView {
-                        Label("Ricerca non disponibile", systemImage: "exclamationmark.triangle")
+                        Label("Search Unavailable", systemImage: "exclamationmark.triangle")
                     } actions: {
-                        Button("Riprova") { model.submitSearch() }.help(error)
+                        Button("Retry") { model.submitSearch() }.help(error)
                     }
                 } else {
-                    ContentUnavailableView("Elenco non disponibile", systemImage: "exclamationmark.triangle",
+                    ContentUnavailableView("List Unavailable", systemImage: "exclamationmark.triangle",
                                            description: Text(error))
                         .padding(16)
                 }
             } else if global && !searchReady {
-                ProgressView("Ricerca in corso…")
+                ProgressView("Searching…")
                     .controlSize(.regular)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.rows.isEmpty && (global ? searchReady : model.lastRequest == model.request) {
                 emptyState
             } else if model.rows.isEmpty {
-                ProgressView().controlSize(.small).accessibilityLabel("Caricamento elenco")
+                ProgressView().controlSize(.small).accessibilityLabel("Loading Items")
             } else if layout.wrappedValue == .grid {
                 grid
             } else {
@@ -285,7 +285,7 @@ struct FileBrowserView: View {
 
     private var table: some View {
         Table(model.rows, selection: $model.selection, sortOrder: sort) {
-            TableColumn("Nome", value: \.name) { entry in
+            TableColumn("Name", value: \.name) { entry in
                 HStack(spacing: 9) {
                     if global && layout.wrappedValue == .list {
                         FileThumbnail(entry: entry, size: .row, source: model.previewURL(for: entry),
@@ -314,19 +314,19 @@ struct FileBrowserView: View {
                 .help(entry.displayPath)
             }
             .width(min: 143, ideal: 334)
-            TableColumn("Su disco", value: \.diskBytes) { entry in
+            TableColumn("On Disk", value: \.diskBytes) { entry in
                 DiskUsageLabel(usage: model.diskUsage(for: entry))
                     .font(.callout)
             }
             .width(min: 99, ideal: 120, max: 152)
             .alignment(.trailing)
-            TableColumn("Dim. logica", value: \.logical) { entry in
+            TableColumn("Logical Size", value: \.logical) { entry in
                 sizeCell(entry.logical)
             }
             .width(min: 86, ideal: 108, max: 140)
             .alignment(.trailing)
-            TableColumn("Modificato", value: \.modified) { entry in
-                Text(entry.modified, format: .dateTime.day().month(.abbreviated).year())
+            TableColumn("Modified", value: \.modified) { entry in
+                Text(entry.modified, format: .dateTime.day().month(.abbreviated).year().locale(StorageStyle.locale))
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -431,8 +431,8 @@ struct FileBrowserView: View {
         .focusable(interactions: .edit)
         .focused($gridFocus, equals: entry.id)
         .accessibilityAddTraits(selected ? .isSelected : [])
-        .accessibilityHint(entry.isFolder ? "Doppio clic per sfogliare" :
-                           (model.previewURL(for: entry) == nil ? "Mostra nel Finder dal menu contestuale" : "Spazio per aprire l’anteprima"))
+        .accessibilityHint(entry.isFolder ? "Double-click to open" :
+                           (model.previewURL(for: entry) == nil ? "Use the context menu to show this file in Finder" : "Press Space to preview"))
         .help(entry.displayPath)
         .simultaneousGesture(TapGesture(count: 2).onEnded {
             guard (NSApp.currentEvent?.modifierFlags ?? []).intersection([.command, .shift]).isEmpty else { return }
@@ -488,28 +488,28 @@ struct FileBrowserView: View {
     @ViewBuilder
     private func entryActions(_ entries: [StorageEntry]) -> some View {
         if entries.count == 1, let entry = entries.first {
-            if entry.isFolder { Button("Apri cartella") { model.openFolder(entry.id) } }
+            if entry.isFolder { Button("Open Folder") { model.openFolder(entry.id) } }
             if let url = model.previewURL(for: entry) {
-                Button("Anteprima") { previewURL = url }
+                Button("Preview") { previewURL = url }
             } else if entry.hasThumbnail, let path = entry.parent {
                 let parent = EntryKey(tree: entry.id.tree, path: path)
                 if model.canOfferPreviewAccess(in: parent) {
-                    Button("Consenti anteprime nella cartella…") { requestPreviews(in: parent) }
+                    Button("Allow Previews in This Folder…") { requestPreviews(in: parent) }
                 }
             }
-            Button("Dettagli") {
+            Button("Details") {
                 model.selection = [entry.id]
                 model.showsDetails = true
             }
-            Button("Copia percorso") { copyEntryPath(entry) }
+            Button("Copy Path") { copyEntryPath(entry) }
         }
         if !entries.isEmpty {
-            Button("Mostra nel Finder") { model.reveal(entries.map(\.id)) }
+            Button("Show in Finder") { model.reveal(entries.map(\.id)) }
             if !entries.contains(where: { FileDeletion.isProtected($0.id) }) {
                 Divider()
-                Button("Sposta nel Cestino") { moveToTrash(entries) }
+                Button("Move to Trash") { moveToTrash(entries) }
                     .disabled(!model.canRemove(entries, by: .trash))
-                Button("Elimina definitivamente…", role: .destructive) { confirmDeletion(entries) }
+                Button("Delete Permanently…", role: .destructive) { confirmDeletion(entries) }
                     .disabled(!model.canRemove(entries, by: .permanent))
             }
         }
@@ -526,21 +526,21 @@ struct FileBrowserView: View {
 
     private var emptyState: some View {
         ContentUnavailableView {
-            Label(search.wrappedValue.isEmpty ? "Nessun elemento indicizzato" : "Nessun risultato",
+            Label(search.wrappedValue.isEmpty ? "No Indexed Items" : "No Results",
                   systemImage: search.wrappedValue.isEmpty ? "folder" : "magnifyingglass")
         } description: {
-            if global { Text("Nessuna corrispondenza per «\(model.submittedSearch)».") }
-            else if !search.wrappedValue.isEmpty { Text("Prova con un altro nome.") }
-            else if folders, model.folderInfo == nil { Text("La cartella potrebbe essere stata spostata o rimossa.") }
-            else if folders { Text("Questa cartella non contiene elementi accessibili nell’indice.") }
+            if global { Text("No matches for “\(model.submittedSearch)”.") }
+            else if !search.wrappedValue.isEmpty { Text("Try a different name.") }
+            else if folders, model.folderInfo == nil { Text("This folder may have been moved or deleted.") }
+            else if folders { Text("The index has no accessible items in this folder.") }
         } actions: {
             if global, !model.searchFilters.similar,
                model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) == model.submittedSearch {
-                Button("Includi nomi simili") { model.searchFilters.similar = true }
+                Button("Include Similar Names") { model.searchFilters.similar = true }
             }
-            else if !search.wrappedValue.isEmpty { Button("Azzera ricerca") { search.wrappedValue = "" } }
+            else if !search.wrappedValue.isEmpty { Button("Clear Search") { search.wrappedValue = "" } }
             else if folders, model.folder.path != model.folder.tree.root, model.folderInfo == nil {
-                Button("Torna indietro") { model.upOneFolder() }
+                Button("Go Back") { model.upOneFolder() }
             }
         }
         .padding(16)
@@ -548,7 +548,7 @@ struct FileBrowserView: View {
 
     private func resultLocation(for entry: StorageEntry) -> String {
         let path = parentDisplay(for: entry)
-        return global && model.similarNames.contains(entry.id) ? "Nome simile · \(path)" : path
+        return global && model.similarNames.contains(entry.id) ? "Similar name · \(path)" : path
     }
 
     @ViewBuilder
@@ -565,7 +565,7 @@ struct FileBrowserView: View {
             }
             if !model.submittedSearch.isEmpty,
                model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) != model.submittedSearch {
-                Text("Risultati per «\(model.submittedSearch)»")
+                Text("Results for “\(model.submittedSearch)”")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -583,7 +583,7 @@ struct FileBrowserView: View {
     private var searchInput: some View {
         HStack(spacing: 8) {
             searchField
-            Button("Cerca") { model.submitSearch() }
+            Button("Search") { model.submitSearch() }
                 .buttonStyle(.borderedProminent)
                 .disabled(model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
@@ -592,25 +592,25 @@ struct FileBrowserView: View {
     @ViewBuilder
     private var searchOptions: some View {
         Menu {
-            Toggle("Includi nomi simili", isOn: $model.searchFilters.similar)
-            Picker("Tipo", selection: $model.searchFilters.kind) {
-                Text("Tutti").tag(SearchFilters.Kind.all)
-                Text("File").tag(SearchFilters.Kind.files)
-                Text("Cartelle").tag(SearchFilters.Kind.folders)
+            Toggle("Include Similar Names", isOn: $model.searchFilters.similar)
+            Picker("Type", selection: $model.searchFilters.kind) {
+                Text("All").tag(SearchFilters.Kind.all)
+                Text("Files").tag(SearchFilters.Kind.files)
+                Text("Folders").tag(SearchFilters.Kind.folders)
             }
         } label: {
             Label(filterLabel, systemImage: "line.3.horizontal.decrease")
         }
-        .help("Cerca parole separate e piccoli refusi. Disattiva i nomi simili per cercare la frase esatta.")
+        .help("Include separate words and small typos. Turn off similar names to match the exact phrase.")
         if !model.submittedSearch.isEmpty, layout.wrappedValue == .grid { sortMenu }
         viewPicker
     }
 
     private var filterLabel: String {
         switch model.searchFilters.kind {
-        case .files: return "Solo file"
-        case .folders: return "Solo cartelle"
-        case .all: return model.searchFilters.similar ? "Filtri" : "Frase esatta"
+        case .files: return "Files Only"
+        case .folders: return "Folders Only"
+        case .all: return model.searchFilters.similar ? "Filters" : "Exact Phrase"
         }
     }
 
@@ -618,11 +618,11 @@ struct FileBrowserView: View {
         HStack(spacing: 8) {
             if folders {
                 Button { model.upOneFolder() } label: {
-                    Label("Cartella superiore", systemImage: "chevron.up").labelStyle(.iconOnly)
+                    Label("Parent Folder", systemImage: "chevron.up").labelStyle(.iconOnly)
                 }
                 .disabled(model.folder.path == model.folder.tree.root)
                 .keyboardShortcut(.upArrow, modifiers: .command)
-                .help("Cartella superiore")
+                .help("Parent Folder")
                 breadcrumb
                     .frame(maxWidth: 320, alignment: .leading)
                 Spacer(minLength: 0)
@@ -637,7 +637,7 @@ struct FileBrowserView: View {
     }
 
     private var viewPicker: some View {
-        Picker("Vista", selection: layout) {
+        Picker("View", selection: layout) {
             ForEach(BrowserLayout.allCases) { option in
                 Label(option.title, systemImage: option.symbol).tag(option)
             }
@@ -645,23 +645,23 @@ struct FileBrowserView: View {
         .pickerStyle(.menu)
         .labelsHidden()
         .fixedSize()
-        .help("Cambia vista")
+        .help("Change View")
     }
 
     private var searchField: some View {
         HStack(spacing: 7) {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary).accessibilityHidden(true)
-            TextField(global ? "Nome o estensione" : (folders ? "Cerca qui" : "Cerca per nome"), text: search)
+            TextField(global ? "Name or extension" : (folders ? "Search this folder" : "Search by name"), text: search)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
                 .onSubmit { if global { model.submitSearch() } }
-                .accessibilityLabel(global ? "Cerca file e cartelle" : (folders ? "Cerca in questa cartella" : "Cerca file per nome"))
+                .accessibilityLabel(global ? "Search files and folders" : (folders ? "Search this folder" : "Search files by name"))
             if !search.wrappedValue.isEmpty {
                 Button {
                     if global { model.clearSearch() }
                     else { search.wrappedValue = "" }
                 } label: {
-                    Label("Azzera ricerca", systemImage: "xmark.circle.fill").labelStyle(.iconOnly)
+                    Label("Clear Search", systemImage: "xmark.circle.fill").labelStyle(.iconOnly)
                 }
                 .buttonStyle(.plain)
             }
@@ -681,7 +681,7 @@ struct FileBrowserView: View {
 
     private var sortMenu: some View {
         Menu {
-            Picker("Ordina per", selection: Binding(get: { model.request.sort }, set: { field in
+            Picker("Sort By", selection: Binding(get: { model.request.sort }, set: { field in
                 sort.wrappedValue = [field.comparator(field == .name ? .forward : .reverse)]
             })) {
                 ForEach(EntrySort.allCases, id: \.self) { field in
@@ -689,14 +689,14 @@ struct FileBrowserView: View {
                 }
             }
             Divider()
-            Toggle("Decrescente", isOn: Binding(get: { !model.request.ascending }, set: { descending in
+            Toggle("Descending", isOn: Binding(get: { !model.request.ascending }, set: { descending in
                 sort.wrappedValue = [model.request.sort.comparator(descending ? .reverse : .forward)]
             }))
         } label: {
-            Label("Ordina", systemImage: "arrow.up.arrow.down")
+            Label("Sort", systemImage: "arrow.up.arrow.down")
         }
         .fixedSize()
-        .help("Ordina per \(model.request.sort.title)")
+        .help("Sort by \(model.request.sort.title)")
     }
 
     private var breadcrumb: some View {
@@ -705,7 +705,7 @@ struct FileBrowserView: View {
             Menu {
                 Button(model.volumeName) { model.openFolder(EntryKey(tree: .data, path: VolumeTree.data.root)) }
                 if !model.isFixture {
-                    Button("Sistema macOS") { model.openFolder(EntryKey(tree: .system, path: "/")) }
+                    Button(VolumeTree.systemDisplayName) { model.openFolder(EntryKey(tree: .system, path: "/")) }
                 }
                 if trail.count > 2 {
                     Divider()
@@ -714,12 +714,12 @@ struct FileBrowserView: View {
                     }
                 }
             } label: {
-                Label(trail.first?.0 ?? "Disco", systemImage: "internaldrive")
+                Label(trail.first?.0 ?? "Disk", systemImage: "internaldrive")
                     .lineLimit(1)
             }
             .menuStyle(.borderlessButton)
             .frame(maxWidth: 155, alignment: .leading)
-            .accessibilityLabel("Posizione e dischi")
+            .accessibilityLabel("Location and Disks")
             if let last = trail.last, trail.count > 1 {
                 Image(systemName: trail.count > 2 ? "ellipsis" : "chevron.right")
                     .font(.caption.weight(.semibold))
@@ -739,25 +739,25 @@ struct FileBrowserView: View {
         return HStack(spacing: 8) {
             if !entries.isEmpty {
                 if entries.count > 1 {
-                    Text("\(entries.count.formatted()) selezionati")
+                    Text("\(StorageStyle.count(entries.count)) selected")
                         .foregroundStyle(.secondary).monospacedDigit()
                         .fixedSize()
                 }
                 Button {
                     model.reveal(model.selectedEntries.map(\.id))
                 } label: {
-                    Label("Mostra nel Finder", systemImage: "arrow.up.forward.app")
+                    Label("Show in Finder", systemImage: "arrow.up.forward.app")
                 }
                 .keyboardShortcut("r", modifiers: .command)
                 if let entry = model.selected {
                     if let url = model.previewURL(for: entry) {
                         Button { previewURL = url } label: {
-                            Label("Anteprima", systemImage: "eye").labelStyle(.iconOnly)
+                            Label("Preview", systemImage: "eye").labelStyle(.iconOnly)
                         }
-                        .help("Anteprima (Spazio)")
+                        .help("Preview (Space)")
                     }
                     HStack(spacing: 4) {
-                        Text("Su disco").foregroundStyle(.secondary)
+                        Text("On Disk").foregroundStyle(.secondary)
                         DiskUsageLabel(usage: model.diskUsage(for: entry))
                     }
                     .accessibilityElement(children: .combine)
@@ -769,46 +769,46 @@ struct FileBrowserView: View {
             }
             if model.inspectedEntry != nil {
                 Button { model.showsDetails.toggle() } label: {
-                    Label(model.showsDetails ? "Nascondi dettagli" : "Dettagli", systemImage: "info.circle")
+                    Label(model.showsDetails ? "Hide Details" : "Details", systemImage: "info.circle")
                         .labelStyle(.iconOnly)
                 }
-                .help(model.showsDetails ? "Nascondi dettagli" : "Mostra dimensioni esatte e dettagli")
+                .help(model.showsDetails ? "Hide Details" : "Show exact sizes and details")
             }
             Spacer()
             if entries.contains(where: { FileDeletion.isProtected($0.id) }) {
-                Label(entries.count == 1 ? "Posizione protetta" : "Selezione con elementi protetti", systemImage: "lock")
+                Label(entries.count == 1 ? "Protected Location" : "Selection Includes Protected Items", systemImage: "lock")
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
-                    .help("SpaceTrail può rimuovere i file personali nelle cartelle accessibili del tuo account.")
+                    .help("SpaceTrail can remove personal files in the accessible folders of your account.")
             } else if !entries.isEmpty {
                 Button { moveToTrash(model.selectedEntries) } label: {
-                    Label("Sposta nel Cestino", systemImage: "trash")
+                    Label("Move to Trash", systemImage: "trash")
                 }
                 .fixedSize()
                 .disabled(!model.canRemove(entries, by: .trash) || searchFocused)
                 .keyboardShortcut(.delete, modifiers: .command)
-                .help("Sposta i file selezionati nel Cestino (⌘⌫)")
+                .help("Move selected files to Trash (⌘⌫)")
                 let allowed = model.canRemove(entries, by: .permanent)
                 Button(role: .destructive) { confirmDeletion(model.selectedEntries) } label: {
-                    Text("Elimina…")
+                    Text("Delete…")
                 }
                 .fixedSize()
-                .accessibilityLabel("Elimina definitivamente")
+                .accessibilityLabel("Delete Permanently")
                 .disabled(!allowed || searchFocused)
                 .keyboardShortcut(.delete, modifiers: [.command, .option])
-                .help(allowed ? "Elimina definitivamente (⌥⌘⌫)" : "Seleziona file o collegamenti in una posizione accessibile.")
+                .help(allowed ? "Delete permanently (⌥⌘⌫)" : "Select files or links in an accessible location.")
             }
             if model.page > 0 || model.hasMore {
                 Button { model.page -= 1; model.selection.removeAll() } label: {
-                    Label("Pagina precedente", systemImage: "chevron.left").labelStyle(.iconOnly)
+                    Label("Previous Page", systemImage: "chevron.left").labelStyle(.iconOnly)
                 }
                 .disabled(model.page == 0)
-                .help("Pagina precedente")
+                .help("Previous Page")
                 Button { model.page += 1; model.selection.removeAll() } label: {
-                    Label("Pagina successiva", systemImage: "chevron.right").labelStyle(.iconOnly)
+                    Label("Next Page", systemImage: "chevron.right").labelStyle(.iconOnly)
                 }
                 .disabled(!model.hasMore || (global ? !searchReady : model.lastRequest != model.request))
-                .help("Pagina successiva")
+                .help("Next Page")
             }
         }
         .controlSize(.small)
@@ -819,11 +819,11 @@ struct FileBrowserView: View {
     private var pageLabel: String {
         if model.page == 0 && !model.hasMore {
             let count = model.rows.count
-            return count == 1 ? "1 elemento" : "\(count.formatted()) elementi"
+            return count == 1 ? "1 item" : "\(StorageStyle.count(count)) items"
         }
         let first = model.page * model.request.limit + 1
         let last = first + model.rows.count - 1
-        return "Elementi \(first.formatted())–\(last.formatted())"
+        return "Items \(StorageStyle.count(first))–\(StorageStyle.count(last))"
     }
 
     private func sizeCell(_ bytes: Int64) -> some View {

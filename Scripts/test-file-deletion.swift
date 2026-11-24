@@ -7,111 +7,111 @@ enum FileDeletionTests {
         let manager = FileManager.default
         let fixture = manager.temporaryDirectory.resolvingSymlinksInPath()
             .appendingPathComponent("spacetrail-deletion-\(UUID())")
-        let directory = fixture.appendingPathComponent("dati")
+        let directory = fixture.appendingPathComponent("data")
         try manager.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? manager.removeItem(at: fixture) }
         setenv("SPACETRAIL_ROOT", directory.path, 1)
-        setenv("SPACETRAIL_SUPPORT", fixture.appendingPathComponent("indice").path, 1)
+        setenv("SPACETRAIL_SUPPORT", fixture.appendingPathComponent("index").path, 1)
         guard let fixtureRoot = SpaceTrailPaths.fixtureRoot, let home = SpaceTrailPaths.personalFolder else {
-            preconditionFailure("Percorso di prova assente")
+            preconditionFailure("Missing test path")
         }
         let root = URL(fileURLWithPath: home.path, isDirectory: true)
         try manager.createDirectory(at: root, withIntermediateDirectories: true)
 
         let data = URL(fileURLWithPath: fixtureRoot, isDirectory: true)
-        for url in [data.appendingPathComponent("System/Library/servizio"),
-                    data.appendingPathComponent("Library/LaunchAgents/servizio.plist"),
-                    data.appendingPathComponent("Users/Shared/condiviso.txt"),
-                    root.deletingLastPathComponent().appendingPathComponent(root.lastPathComponent + "-altra/prova.txt"),
-                    root.appendingPathComponent("Library/Preferences/prova.plist"),
-                    root.appendingPathComponent("lIbRaRy/Preferenze/prova.txt"),
+        for url in [data.appendingPathComponent("System/Library/service"),
+                    data.appendingPathComponent("Library/LaunchAgents/service.plist"),
+                    data.appendingPathComponent("Users/Shared/shared.txt"),
+                    root.deletingLastPathComponent().appendingPathComponent(root.lastPathComponent + "-other/test.txt"),
+                    root.appendingPathComponent("Library/Preferences/test.plist"),
+                    root.appendingPathComponent("lIbRaRy/Preferences/test.txt"),
                     root.appendingPathComponent(".ssh/config"),
-                    root.appendingPathComponent("Downloads/Prova.APP/Contents/Resources/prova.txt")] {
+                    root.appendingPathComponent("Downloads/Test.APP/Contents/Resources/test.txt")] {
             try manager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try Data("intatto".utf8).write(to: url)
+            try Data("unchanged".utf8).write(to: url)
             try verifyProtected(snapshot(url, kind: .file))
             precondition(manager.fileExists(atPath: url.path))
         }
 
-        let locked = root.appendingPathComponent("bloccato.txt")
-        try Data("intatto".utf8).write(to: locked)
+        let locked = root.appendingPathComponent("locked.txt")
+        try Data("unchanged".utf8).write(to: locked)
         precondition(chflags(locked.path, UInt32(UF_IMMUTABLE)) == 0)
         defer { _ = chflags(locked.path, 0) }
         try verifyProtected(snapshot(locked, kind: .file), expectedInIndex: false)
         precondition(manager.fileExists(atPath: locked.path))
 
-        let original = root.appendingPathComponent("SpaceTrail-prova-\(UUID()).txt")
-        try Data("prova".utf8).write(to: original)
+        let original = root.appendingPathComponent("SpaceTrail-test-\(UUID()).txt")
+        try Data("test".utf8).write(to: original)
         let first = try snapshot(original, kind: .file)
         try FileDeletion.remove(first, access: .complete)
         precondition(!manager.fileExists(atPath: original.path))
         do {
             try FileDeletion.remove(first, access: .complete)
-            preconditionFailure("Un file già rimosso dovrebbe essere segnalato")
+            preconditionFailure("A missing file should be reported")
         } catch FileDeletion.Failure.missing { }
 
-        try Data("versione indicizzata".utf8).write(to: original)
+        try Data("indexed version".utf8).write(to: original)
         let stale = try snapshot(original, kind: .file)
-        let saved = root.appendingPathComponent("salvato.txt")
+        let saved = root.appendingPathComponent("saved.txt")
         try manager.moveItem(at: original, to: saved)
-        let replacement = Data("versione nuova".utf8)
+        let replacement = Data("new version".utf8)
         try replacement.write(to: original)
         try mustReject { try FileDeletion.remove(stale, access: .complete) }
         try mustReject { try FileDeletion.moveToTrash(stale, access: .complete) }
         let remaining = try Data(contentsOf: original)
         precondition(remaining == replacement)
 
-        let parent = root.appendingPathComponent("SpaceTrail-prova-\(UUID())")
+        let parent = root.appendingPathComponent("SpaceTrail-test-\(UUID())")
         try manager.createDirectory(at: parent, withIntermediateDirectories: false)
-        let nested = parent.appendingPathComponent("altro.txt")
-        try Data("mantieni".utf8).write(to: nested)
+        let nested = parent.appendingPathComponent("other.txt")
+        try Data("keep".utf8).write(to: nested)
         let previousLocation = try snapshot(nested, kind: .file)
-        let moved = fixture.appendingPathComponent("fuori-radice")
+        let moved = fixture.appendingPathComponent("outside-root")
         try manager.moveItem(at: parent, to: moved)
         try manager.createSymbolicLink(at: parent, withDestinationURL: moved)
         try mustReject { try FileDeletion.remove(previousLocation, access: .complete) }
         try mustReject { try FileDeletion.moveToTrash(previousLocation, access: .complete) }
-        precondition(manager.fileExists(atPath: moved.appendingPathComponent("altro.txt").path))
+        precondition(manager.fileExists(atPath: moved.appendingPathComponent("other.txt").path))
 
         let link = try snapshot(parent, kind: .symbolicLink)
         if CommandLine.arguments.contains("--trash") {
             try verifyTrash(link)
             try verifyTrash(snapshot(original, kind: .file))
-            print("Verificato lo spostamento nel Cestino e il recupero di un file e di un collegamento di prova.")
+            print("Verified moving a test file and symlink to the Trash and restoring both.")
         }
         try FileDeletion.remove(link, access: .complete)
         precondition(!manager.fileExists(atPath: parent.path))
-        precondition(manager.fileExists(atPath: moved.appendingPathComponent("altro.txt").path))
+        precondition(manager.fileExists(atPath: moved.appendingPathComponent("other.txt").path))
         try checkFolderTrash(home: root, manager: manager)
-        print("Verificati percorsi e file protetti, eliminazione, sostituzione del file e collegamenti simbolici.")
+        print("Verified protected paths and files, deletion, replacement, and symbolic links.")
     }
 
     private static func checkFolderTrash(home: URL, manager: FileManager) throws {
-        for path in ["Documents", "Library", "Archivio/Prova.app"] {
+        for path in ["Documents", "Library", "Archive/Test.app"] {
             let folder = home.appendingPathComponent(path)
             try manager.createDirectory(at: folder, withIntermediateDirectories: true)
             try verifyProtected(snapshot(folder, kind: .directory))
         }
 
-        let folder = home.appendingPathComponent("Cartella-prova-\(UUID())")
-        let child = folder.appendingPathComponent("Sottocartella/prova.txt")
+        let folder = home.appendingPathComponent("Test-folder-\(UUID())")
+        let child = folder.appendingPathComponent("Subfolder/test.txt")
         try manager.createDirectory(at: child.deletingLastPathComponent(), withIntermediateDirectories: true)
-        let data = Data("contenuto della cartella".utf8)
+        let data = Data("folder contents".utf8)
         try data.write(to: child)
         let entry = try snapshot(folder, kind: .directory)
         precondition(FileDeletion.canMoveToTrash(entry, access: .complete))
         precondition(!FileDeletion.canRemove(entry, access: .complete))
         do {
             try FileDeletion.remove(entry, access: .complete)
-            preconditionFailure("La rimozione definitiva dei file deve rifiutare una cartella")
+            preconditionFailure("Permanent file deletion must reject directories")
         } catch FileDeletion.Failure.unavailable { }
         if CommandLine.arguments.contains("--trash") {
             try verifyTrash(entry)
             let restored = try Data(contentsOf: child)
             precondition(restored == data)
-            print("Verificato il recupero dal Cestino di una cartella con sottocartella e file.")
+            print("Verified restoring a folder and its contents from the Trash.")
         }
-        try manager.moveItem(at: folder, to: folder.appendingPathExtension("prima"))
+        try manager.moveItem(at: folder, to: folder.appendingPathExtension("previous"))
         try manager.createDirectory(at: folder, withIntermediateDirectories: false)
         try mustReject { try FileDeletion.moveToTrash(entry, access: .complete) }
         precondition(manager.fileExists(atPath: folder.path))
@@ -129,7 +129,7 @@ enum FileDeletionTests {
     private static func mustReject(_ perform: () throws -> Void) throws {
         do {
             try perform()
-            preconditionFailure("L’elemento sostituito dovrebbe restare sul disco")
+            preconditionFailure("A replacement item should remain on disk")
         } catch FileDeletion.Failure.changed { }
     }
 
@@ -140,18 +140,18 @@ enum FileDeletionTests {
         }
         do {
             try FileDeletion.remove(entry, access: .complete)
-            preconditionFailure("Un file protetto non può essere eliminato")
+            preconditionFailure("A protected item must not be deleted")
         } catch FileDeletion.Failure.unavailable { }
         do {
             try FileDeletion.moveToTrash(entry, access: .complete)
-            preconditionFailure("Un file protetto non può essere spostato nel Cestino")
+            preconditionFailure("A protected item must not be moved to the Trash")
         } catch FileDeletion.Failure.unavailable { }
     }
 
     private static func verifyTrash(_ entry: StorageEntry) throws {
         let source = URL(fileURLWithPath: entry.id.path)
         guard let destination = try FileDeletion.moveToTrash(entry, access: .complete) else {
-            preconditionFailure("Il Cestino dovrebbe restituire la destinazione")
+            preconditionFailure("The Trash operation should report its destination")
         }
         let sourceRemoved = (try? diskStat(entry.id.path)) == nil
         let destinationInfo = try? diskStat(destination.path)

@@ -11,7 +11,7 @@ guard let inputImage = CGImageSourceCreateWithURL(input as CFURL, nil),
       let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
       let canvas = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
                              space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
-    fatalError("Impossibile leggere l’icona sorgente.")
+    fatalError("Could not read the source icon.")
 }
 
 // The supplied artwork has a luminous rounded badge inside an opaque square.
@@ -26,7 +26,7 @@ canvas.draw(cropped, in: frame)
 
 guard let icon = canvas.makeImage(),
       let destination = CGImageDestinationCreateWithURL(output as CFURL, "public.png" as CFString, 1, nil) else {
-    fatalError("Impossibile esportare l’icona normalizzata.")
+    fatalError("Could not export the normalized icon.")
 }
 CGImageDestinationAddImage(destination, icon, nil)
-guard CGImageDestinationFinalize(destination) else { fatalError("Impossibile scrivere l’icona.") }
+guard CGImageDestinationFinalize(destination) else { fatalError("Could not write the icon.") }

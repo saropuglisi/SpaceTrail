@@ -13,9 +13,9 @@ struct SQLiteFailure: LocalizedError {
     var errorDescription: String? {
         switch code {
         case SQLITE_FULL:
-            return "Lo spazio disponibile per l’indice è esaurito. Libera spazio e riprova."
+            return "The index is out of disk space. Free up space and try again."
         case 4618, 4874:
-            return "SQLite non riesce ad aprire il journal dell’indice. Riprova e controlla lo spazio libero."
+            return "SQLite could not open the index journal. Check the available disk space and try again."
         default:
             return "SQLite (\(code)) · \(message)"
         }
@@ -32,9 +32,9 @@ final class SQLiteConnection {
         let flags = readOnly ? SQLITE_OPEN_READONLY : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE
         let code = sqlite3_open_v2(url.path, &handle, flags | SQLITE_OPEN_NOMUTEX | SQLITE_OPEN_URI, nil)
         guard code == SQLITE_OK, let handle else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "Impossibile aprire l’indice."
+            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "Could not open the index."
             if let handle { sqlite3_close(handle) }
-            throw SQLiteFailure(code: code, operation: "apertura", message: message)
+            throw SQLiteFailure(code: code, operation: "open", message: message)
         }
         self.handle = handle
         self.indexLock = indexLock
@@ -140,7 +140,7 @@ final class SQLiteConnection {
         let status = sqlite3_prepare_v2(handle, sql, -1, &statement, nil)
         try check(status, operation: sql)
         guard let statement else {
-            throw SQLiteFailure(code: SQLITE_MISUSE, operation: sql, message: "Istruzione vuota.")
+            throw SQLiteFailure(code: SQLITE_MISUSE, operation: sql, message: "Empty statement.")
         }
         statements[sql] = statement
         return statement

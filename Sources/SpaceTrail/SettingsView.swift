@@ -6,35 +6,35 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
-            Section("Indicizzazione") {
+            Section("Indexing") {
                 if !model.isFixture, model.diskAccess != nil {
-                    Toggle("Aggiorna anche ad app chiusa", isOn: Binding(
+                    Toggle("Keep the index updated in the background", isOn: Binding(
                         get: { model.wantsBackground },
                         set: { model.setBackground($0) }
                     ))
                     if model.needsBackgroundApproval {
-                        Button("Apri Impostazioni di Sistema") { model.openBackgroundSettings() }
+                        Button("Open System Settings") { model.openBackgroundSettings() }
                     }
                     Text(backgroundDescription)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 if let overview = model.overview {
-                    LabeledContent("Ultimo aggiornamento") {
-                        Text(overview.lastUpdated.formatted(date: .abbreviated, time: .shortened))
+                    LabeledContent("Last Updated") {
+                        Text(overview.lastUpdated, format: StorageStyle.dateAndTime)
                     }
                     if let lastAudit = overview.lastAudit {
-                        LabeledContent("Ultima verifica") {
-                            Text(lastAudit.formatted(date: .abbreviated, time: .shortened))
+                        LabeledContent("Last Check") {
+                            Text(lastAudit, format: StorageStyle.dateAndTime)
                         }
                     }
                 }
                 if model.diskAccess != nil {
-                    Button("Verifica ora") { model.requestCheck() }
+                    Button("Check Now") { model.requestCheck() }
                         .disabled(model.state?.phase == .checking || model.state?.phase == .scanning)
                 }
                 if model.state?.phase == .checking {
-                    Label("Verifica in corso", systemImage: "arrow.clockwise")
+                    Label("Checking…", systemImage: "arrow.clockwise")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -45,28 +45,28 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Accesso al disco") {
-                LabeledContent("Indicizzazione in uso") {
-                    Text(model.indexAccess == .complete ? "Accesso completo" :
-                            (model.indexAccess == .limited ? "Accesso limitato" : "Da configurare"))
+            Section("Disk Access") {
+                LabeledContent("Current Access") {
+                    Text(model.indexAccess == .complete ? "Full Disk Access" :
+                            (model.indexAccess == .limited ? "Limited Access" : "Setup Required"))
                 }
-                Button("Configura accesso al disco…") { showingAccess = true }
+                Button("Set Up Disk Access…") { showingAccess = true }
                 if model.diskAccess == .complete, model.indexAccess == .limited {
-                    Text("Il broker aggiorna le cartelle accessibili. Le cartelle protette tornano ad aggiornarsi quando macOS riconosce l’accesso completo al disco.")
+                    Text("The broker updates accessible folders. It will resume updating protected folders once macOS grants Full Disk Access.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else if model.indexAccess?.scansAppData == false {
-                    Text("Per i contenitori protetti di altre app, SpaceTrail usa le informazioni già presenti nell’indice.")
+                    Text("SpaceTrail displays previously indexed information for protected app containers.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
             }
 
-            Section("Dimensioni") {
-                Text("SpaceTrail calcola e aggiorna lo spazio delle cartelle in background, anche a finestra chiusa.")
+            Section("Disk Usage") {
+                Text("SpaceTrail measures and updates folder sizes in the background, even after you close the app.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("Quando alcune parti della cartella non sono misurabili, il valore preceduto da ≥ indica lo spazio minimo rilevato.")
+                Text("The ≥ symbol shows the minimum measured size when parts of a folder are inaccessible.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }
@@ -77,7 +77,7 @@ struct SettingsView: View {
         .sheet(isPresented: $showingAccess) {
             VStack(spacing: 0) {
                 DiskAccessSetupView(model: model) { showingAccess = false }
-                Button("Chiudi") { showingAccess = false }
+                Button("Close") { showingAccess = false }
                     .keyboardShortcut(.cancelAction)
                     .padding(.bottom, 16)
             }
@@ -86,11 +86,11 @@ struct SettingsView: View {
     }
 
     private var backgroundDescription: String {
-        if model.backgroundRunning { return "Attivo. L’indice rimane aggiornato anche dopo che chiudi SpaceTrail." }
+        if model.backgroundRunning { return "Background updates are active while SpaceTrail is closed." }
         if model.needsBackgroundApproval {
-            return "Consenti SpaceTrail in Elementi login ed estensioni. Nel frattempo l’indice si aggiorna con l’app aperta."
+            return "Allow SpaceTrail under Login Items & Extensions. The index continues to update while the app is open."
         }
-        if model.wantsBackground { return "SpaceTrail prova ad avviare gli aggiornamenti automatici." }
-        return "L’indice si aggiorna mentre SpaceTrail è aperto."
+        if model.wantsBackground { return "SpaceTrail is starting background updates." }
+        return "The index updates while SpaceTrail is open."
     }
 }

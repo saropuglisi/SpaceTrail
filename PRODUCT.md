@@ -8,16 +8,16 @@ macOS
 
 ## Stack
 
-Swift, SwiftUI, SQLite, FSEvents e un broker gestito da macOS.
+Swift, SwiftUI, SQLite, FSEvents, and a background broker managed by macOS.
 
 ## Product Purpose
 
-Capire dove finisce lo spazio sul Mac e individuare file da esaminare nel Finder.
+Understand what takes up space on the Mac and find files to inspect in Finder.
 
 ## Operating Context
 
-Il software chiede di scegliere l’accesso al disco prima di avviare la prima indicizzazione e aggiorna l'indice durante l'uso quotidiano. Quando serve, l'utente apre l'app e trova subito l'elenco dei file ordinabile. Una seconda vista permette di sfogliare le cartelle e vedere la dimensione di file e cartelle.
+SpaceTrail asks the user to choose disk access before the first scan and keeps the index up to date during normal use. The app opens to a sortable list of files. The Folders view lets the user browse the disk and see file and folder sizes.
 
 ## Capabilities and Constraints
 
-La panoramica mostra i file più pesanti, il peso delle cartelle e lo storico dell'archiviazione. Il broker usa aggiornamenti incrementali e verifiche periodiche a basso impatto.
+The overview shows the largest files and folders alongside storage history. The broker applies changes incrementally and checks folders periodically in the background.

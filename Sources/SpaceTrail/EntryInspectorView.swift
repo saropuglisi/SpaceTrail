@@ -11,18 +11,18 @@ struct EntryInspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("Dettagli")
+                Text("Details")
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Button {
                     model.showsDetails = false
                 } label: {
-                    Label("Chiudi pannello", systemImage: "xmark")
+                    Label("Close Details", systemImage: "xmark")
                         .labelStyle(.iconOnly)
                 }
                 .buttonStyle(.borderless)
-                .help("Chiudi pannello")
+                .help("Close Details")
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -44,8 +44,8 @@ struct EntryInspectorView: View {
                             }
                             .buttonStyle(.plain)
                             .frame(width: compact ? 124 : nil)
-                            .accessibilityLabel("Apri anteprima")
-                            .help("Apri anteprima Quick Look")
+                            .accessibilityLabel("Open Preview")
+                            .help("Open in Quick Look")
                         }
                         statistics
                     }
@@ -75,10 +75,10 @@ struct EntryInspectorView: View {
                 Button {
                     copyEntryPath(entry)
                 } label: {
-                    Label("Copia percorso", systemImage: "doc.on.doc").labelStyle(.iconOnly)
+                    Label("Copy Path", systemImage: "doc.on.doc").labelStyle(.iconOnly)
                 }
                 .buttonStyle(.borderless)
-                .help("Copia percorso")
+                .help("Copy Path")
             }
         }
     }
@@ -88,7 +88,7 @@ struct EntryInspectorView: View {
             if entry.id.path != entry.id.tree.root {
                 let usage = model.diskUsage(for: entry)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Su disco").font(.subheadline).foregroundStyle(.secondary)
+                    Text("On Disk").font(.subheadline).foregroundStyle(.secondary)
                     Text(usage.accessibleText)
                         .font(.title3.weight(.semibold).monospacedDigit())
                         .help(usage.explanation)
@@ -96,20 +96,20 @@ struct EntryInspectorView: View {
                 .accessibilityElement(children: .combine)
                 if let estimate = entry.footprint {
                     if estimate.sharedBytes > 0 {
-                        Text("\(StorageStyle.size(estimate.sharedBytes)) condivisi con altre voci.")
+                        Text("\(StorageStyle.size(estimate.sharedBytes)) shared with other items.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                     if estimate.incomplete {
-                        Text(entry.isFolder ? "Alcuni blocchi o percorsi non sono misurabili." : "Alcuni blocchi possono essere condivisi.")
+                        Text(entry.isFolder ? "Some blocks or paths could not be measured." : "Some blocks may be shared with other files.")
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }
-            stat("Dimensione logica", StorageStyle.exactSize(entry.logical))
-            if entry.isFolder { stat("Elementi", entry.files.formatted()) }
-            stat("Modificato", entry.modified.formatted(.dateTime.day().month(.abbreviated).year().hour().minute()))
+            stat("Logical Size", StorageStyle.exactSize(entry.logical))
+            if entry.isFolder { stat("Items", StorageStyle.count(entry.files)) }
+            stat("Modified", entry.modified.formatted(StorageStyle.dateAndTime))
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .font(.callout)

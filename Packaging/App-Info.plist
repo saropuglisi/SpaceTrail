@@ -3,7 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
-    <string>it</string>
+    <string>en</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>en</string>
+    </array>
     <key>CFBundleDisplayName</key>
     <string>SpaceTrail</string>
     <key>CFBundleExecutable</key>
@@ -21,13 +25,13 @@
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
-    <string>13</string>
+    <string>14</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>SpaceTrail legge i metadati della Scrivania per trovare i file e misurarne le dimensioni.</string>
+    <string>SpaceTrail reads Desktop file metadata to find files and measure their sizes.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>SpaceTrail legge i metadati dei Documenti per trovare i file e misurarne le dimensioni.</string>
+    <string>SpaceTrail reads Documents file metadata to find files and measure their sizes.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>SpaceTrail legge i metadati dei Download per trovare i file e misurarne le dimensioni.</string>
+    <string>SpaceTrail reads Downloads file metadata to find files and measure their sizes.</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

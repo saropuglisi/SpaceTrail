@@ -16,8 +16,8 @@ struct SpaceOverviewView: View {
                             ? AnyLayout(HStackLayout(alignment: .top, spacing: 26))
                             : AnyLayout(VStackLayout(alignment: .leading, spacing: 22))
                         layout {
-                            ranking("File più pesanti", entries: overview.largeFiles, folders: false)
-                            ranking("Cartelle da esplorare", entries: overview.largeFolders, folders: true)
+                            ranking("Largest Files", entries: overview.largeFiles, folders: false)
+                            ranking("Folders to Explore", entries: overview.largeFolders, folders: true)
                         }
                     }
                     .padding(.horizontal, StorageStyle.inset)
@@ -26,7 +26,7 @@ struct SpaceOverviewView: View {
                 }
             }
         } else if model.overview != nil {
-            ProgressView().accessibilityLabel("Caricamento panoramica")
+            ProgressView().accessibilityLabel("Loading Storage Overview")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             IndexPlaceholder(state: model.state, hasError: model.connectionError != nil || model.brokerProblem != nil)
@@ -40,7 +40,7 @@ struct SpaceOverviewView: View {
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
                 Spacer()
-                Text(StorageStyle.size(sample.capacity) + " totali")
+                Text(StorageStyle.size(sample.capacity) + " total")
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(.secondary)
             }
@@ -55,9 +55,9 @@ struct SpaceOverviewView: View {
             .frame(height: 10)
             .accessibilityHidden(true)
             HStack {
-                legend("\(StorageStyle.size(sample.used)) occupati", tint: StorageStyle.accent)
+                legend("\(StorageStyle.size(sample.used)) used", tint: StorageStyle.accent)
                 Spacer()
-                legend("\(StorageStyle.size(sample.available)) liberi", tint: Color.secondary.opacity(0.35))
+                legend("\(StorageStyle.size(sample.available)) free", tint: Color.secondary.opacity(0.35))
             }
             .font(.callout.monospacedDigit())
         }
@@ -78,12 +78,12 @@ struct SpaceOverviewView: View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).font(.headline).accessibilityAddTraits(.isHeader)
                 .padding(.bottom, 8)
-            Text(folders ? "Una voce per ramo" : "Per spazio su disco")
+            Text(folders ? "One folder per branch" : "By disk usage")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 8)
             if entries.isEmpty {
-                Text("Nessun elemento indicizzato.").font(.callout).foregroundStyle(.secondary)
+                Text("No indexed items.").font(.callout).foregroundStyle(.secondary)
             }
             ForEach(entries) { entry in
                 Divider()
@@ -117,8 +117,8 @@ struct SpaceOverviewView: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(folders ? "Sfoglia cartella" : "Mostra nel Finder")
-                .accessibilityHint(folders ? "Apre la cartella" : "Mostra il file nel Finder")
+                .help(folders ? "Browse Folder" : "Show in Finder")
+                .accessibilityHint(folders ? "Opens the folder" : "Shows the file in Finder")
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -140,12 +140,12 @@ private struct StorageHistoryView: View, Equatable {
         }
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("Andamento dello spazio").font(.headline).accessibilityAddTraits(.isHeader)
+                Text("Storage History").font(.headline).accessibilityAddTraits(.isHeader)
                 Spacer()
-                Picker("Intervallo", selection: $days) {
-                    Text("7 giorni").tag(7)
-                    Text("30 giorni").tag(30)
-                    Text("90 giorni").tag(90)
+                Picker("Range", selection: $days) {
+                    Text("7 Days").tag(7)
+                    Text("30 Days").tag(30)
+                    Text("90 Days").tag(90)
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
@@ -155,8 +155,8 @@ private struct StorageHistoryView: View, Equatable {
             }
             if samples.count < 2 {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Lo storico è appena iniziato").font(.subheadline.weight(.medium))
-                    Text("Il grafico compare dopo rilevazioni in almeno due ore diverse.")
+                    Text("Storage History Is Building").font(.subheadline.weight(.medium))
+                    Text("The chart appears once SpaceTrail has data from two different hours.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -165,21 +165,22 @@ private struct StorageHistoryView: View, Equatable {
                 .background(.quaternary.opacity(0.27), in: RoundedRectangle(cornerRadius: 8))
             } else {
                 Text(active.map {
-                    "\($0.date.formatted(.dateTime.day().month().hour().minute())) · \(StorageStyle.size($0.used)) occupati"
-                } ?? "Spazio occupato rilevato sul disco")
+                    let date = $0.date.formatted(.dateTime.day().month().hour().minute().locale(StorageStyle.locale))
+                    return "\(date) · \(StorageStyle.size($0.used)) used"
+                } ?? "Measured disk usage")
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 Chart {
                     ForEach(samples) { sample in
-                        LineMark(x: .value("Data", sample.date), y: .value("Spazio occupato", sample.used))
+                        LineMark(x: .value("Date", sample.date), y: .value("Used Space", sample.used))
                             .lineStyle(StrokeStyle(lineWidth: 2))
                             .foregroundStyle(StorageStyle.accent)
-                            .accessibilityLabel(sample.date.formatted())
+                            .accessibilityLabel(sample.date.formatted(StorageStyle.dateAndTime))
                             .accessibilityValue(StorageStyle.size(sample.used))
                     }
                     if let active {
-                        RuleMark(x: .value("Data selezionata", active.date)).foregroundStyle(.secondary.opacity(0.35))
-                        PointMark(x: .value("Data selezionata", active.date), y: .value("Spazio occupato", active.used))
+                        RuleMark(x: .value("Selected Date", active.date)).foregroundStyle(.secondary.opacity(0.35))
+                        PointMark(x: .value("Selected Date", active.date), y: .value("Used Space", active.used))
                             .foregroundStyle(StorageStyle.accent)
                             .symbolSize(32)
                     }
@@ -196,7 +197,7 @@ private struct StorageHistoryView: View, Equatable {
                 }
                 .chartXSelection(value: $dateSelection)
                 .frame(height: 165)
-                .accessibilityLabel("Grafico dello spazio occupato")
+                .accessibilityLabel("Disk Usage Chart")
             }
         }
     }

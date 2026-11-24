@@ -58,6 +58,8 @@ public enum SpaceTrailPaths {
 public enum VolumeTree: Int64, CaseIterable, Codable, Sendable {
     case data, system
 
+    public static let systemDisplayName = "macOS System"
+
     public var root: String {
         switch self {
         case .data: return SpaceTrailPaths.fixtureRoot ?? SpaceTrailPaths.dataRoot

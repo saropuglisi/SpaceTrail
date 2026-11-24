@@ -99,10 +99,10 @@ struct FileThumbnail: View {
     private var thumbnail: some View {
         Group {
             if source != nil, let bitmap = preparedImage ?? (loaded?.key == key ? loaded?.image : nil) {
-                Image(bitmap, scale: scale, label: Text("Anteprima disponibile"))
+                Image(bitmap, scale: scale, label: Text("Preview available"))
                     .resizable()
                     .scaledToFit()
-                    .accessibilityLabel("Anteprima disponibile")
+                    .accessibilityLabel("Preview available")
             } else {
                 let locked = entry.hasThumbnail && source == nil
                 Image(systemName: entry.browserSymbol)
@@ -115,7 +115,7 @@ struct FileThumbnail: View {
                                 .offset(x: 5, y: 3)
                         }
                     }
-                    .accessibilityLabel("Anteprima protetta da macOS")
+                    .accessibilityLabel("Preview protected by macOS")
                     .accessibilityHidden(!locked)
             }
         }

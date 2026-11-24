@@ -26,15 +26,15 @@ struct DiskAccessSetupView: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 9) {
-                Text("Prepara l’accesso al disco")
+                Text("Set Up Disk Access")
                     .font(.system(size: 29, weight: .semibold))
                     .tracking(-0.55)
                     .accessibilityAddTraits(.isHeader)
-                Text("SpaceTrail legge nomi, percorsi e dimensioni per trovare i file e mostrarti quanto spazio occupano. L’indice resta su questo Mac.")
+                Text("SpaceTrail reads file names, paths, and sizes so you can find what takes up space. Your index stays on this Mac.")
                     .font(.body)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Dopo la configurazione, SpaceTrail terrà aggiornato l’indice anche a finestra chiusa, se autorizzato da macOS.")
+                Text("SpaceTrail keeps your index up to date after you close the app when macOS allows it to run in the background.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -42,23 +42,23 @@ struct DiskAccessSetupView: View {
 
             Divider()
             VStack(alignment: .leading, spacing: 8) {
-                Label("Accesso completo al disco", systemImage: "lock.shield")
+                Label("Full Disk Access", systemImage: "lock.shield")
                     .font(.headline)
                     .accessibilityAddTraits(.isHeader)
-                Text("In Privacy e sicurezza, aggiungi e abilita SpaceTrail Broker nell’elenco Accesso completo al disco. Puoi trascinarlo dal Finder.")
+                Text("In Privacy & Security, add and enable SpaceTrail Broker under Full Disk Access. You can drag it in from Finder.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 if openedSettings {
-                    Text("SpaceTrail usa l’accesso del broker per la scansione. Puoi aggiungere anche SpaceTrail per le anteprime e le azioni sui file protetti.")
+                    Text("The broker uses this permission to scan the disk. You can also add SpaceTrail for previews and actions on protected files.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
                 HStack(spacing: 10) {
                     if openedSettings {
-                        Button("Riapri Impostazioni") { openSettings() }
-                        Button("Mostra il broker") { model.revealBroker() }
+                        Button("Reopen Settings") { openSettings() }
+                        Button("Show Broker in Finder") { model.revealBroker() }
                     } else {
-                        Button("Apri Impostazioni di Sistema") { openSettings() }
+                        Button("Open System Settings") { openSettings() }
                             .buttonStyle(.borderedProminent)
                     }
                 }
@@ -68,12 +68,12 @@ struct DiskAccessSetupView: View {
             Divider()
             VStack(alignment: .leading, spacing: 9) {
                 if openedSettings {
-                    Button("Continua") { choose(.complete) }
+                    Button("Continue") { choose(.complete) }
                         .buttonStyle(.borderedProminent)
                 }
-                Button("Continua con accesso limitato") { choose(.limited) }
+                Button("Continue with Limited Access") { choose(.limited) }
                     .buttonStyle(.bordered)
-                Text("La scansione delle cartelle protette parte quando macOS riconosce l’accesso. Nel frattempo SpaceTrail aggiorna le cartelle accessibili.")
+                Text("SpaceTrail indexes the folders it can access. It will start scanning protected folders once macOS grants access.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
