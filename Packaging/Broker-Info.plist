@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>it</string>
+    <key>CFBundleDisplayName</key>
+    <string>SpaceTrail Broker</string>
+    <key>CFBundleExecutable</key>
+    <string>SpaceTrailBroker</string>
+    <key>CFBundleIconFile</key>
+    <string>SpaceTrail</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.spacetrail.broker</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleName</key>
+    <string>SpaceTrail Broker</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>9</string>
+    <key>LSBackgroundOnly</key>
+    <true/>
+    <key>NSDesktopFolderUsageDescription</key>
+    <string>SpaceTrail legge i metadati della Scrivania per trovare i file e misurarne le dimensioni.</string>
+    <key>NSDocumentsFolderUsageDescription</key>
+    <string>SpaceTrail legge i metadati dei Documenti per trovare i file e misurarne le dimensioni.</string>
+    <key>NSDownloadsFolderUsageDescription</key>
+    <string>SpaceTrail legge i metadati dei Download per trovare i file e misurarne le dimensioni.</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+</dict>
+</plist>

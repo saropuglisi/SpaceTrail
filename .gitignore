@@ -1,0 +1,14 @@
+# Build e configurazioni locali
+/.build/
+/.swiftpm/
+/dist/
+/DerivedData/
+xcuserdata/
+.DS_Store
+
+# Indici e dati di esecuzione
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+/.env
+/.env.local
