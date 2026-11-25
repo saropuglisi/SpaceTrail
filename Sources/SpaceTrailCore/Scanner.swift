@@ -273,9 +273,11 @@ final class FileScanner {
             || candidate.allocated != previous?.allocated || candidate.logical != previous?.logical
             || candidate.links != previous?.links || candidate.created != previous?.created
         if !candidate.isFolder, allocationChanged || refreshAllocation || accessRestored {
-            let footprintChanged = try index.footprints.update(
-                key, footprint: FileFootprint(path: key.path, info: info), trackPeers: trackPeers
-            )
+            let footprint = FileFootprint(path: key.path, info: info)
+            if allocationChanged, trackPeers {
+                try index.growth.record(candidate, replacing: previous, footprint: footprint)
+            }
+            let footprintChanged = try index.footprints.update(key, footprint: footprint, trackPeers: trackPeers)
             return metadataChanged || footprintChanged || accessRestored
         }
         return metadataChanged || needsWalk

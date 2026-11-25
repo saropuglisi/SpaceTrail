@@ -147,6 +147,19 @@ public struct StorageSample: Identifiable, Equatable, Sendable {
     public var used: Int64 { max(0, capacity - available) }
 }
 
+public struct FileGrowth: Identifiable, Equatable, Sendable {
+    public let entry: StorageEntry
+    public let bytes: Int64
+    public let observed: Date
+
+    public var id: EntryKey { entry.id }
+}
+
+public struct RecentGrowth: Equatable, Sendable {
+    public let since: Date?
+    public let files: [FileGrowth]
+}
+
 public struct Overview: Sendable {
     public let indexedFiles: Int64
     public let indexedBytes: Int64
@@ -157,6 +170,7 @@ public struct Overview: Sendable {
     public let history: [StorageSample]
     public let largeFiles: [StorageEntry]
     public let largeFolders: [StorageEntry]
+    public let recentGrowth: RecentGrowth
 }
 
 public struct BrokerState: Codable, Equatable, Sendable {

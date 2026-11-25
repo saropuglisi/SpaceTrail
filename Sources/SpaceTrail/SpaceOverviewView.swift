@@ -3,7 +3,7 @@ import SpaceTrailCore
 import SwiftUI
 
 struct SpaceOverviewView: View {
-    let model: DashboardModel
+    @Bindable var model: DashboardModel
 
     var body: some View {
         if let overview = model.overview, model.overviewIncludesDetails {
@@ -11,7 +11,24 @@ struct SpaceOverviewView: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         if let space = model.volumeSpace { capacity(space) }
-                        StorageHistoryView(history: overview.history).equatable()
+                        VStack(alignment: .leading, spacing: 10) {
+                            HStack {
+                                Text("Storage History").font(.headline).accessibilityAddTraits(.isHeader)
+                                Spacer()
+                                Picker("Range for Storage History and Recent File Growth", selection: $model.storageDays) {
+                                    Text("24 Hours").tag(1)
+                                    Text("7 Days").tag(7)
+                                    Text("30 Days").tag(30)
+                                    Text("90 Days").tag(90)
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+                                .fixedSize()
+                                .controlSize(.small)
+                            }
+                            StorageHistoryView(history: overview.history, days: model.storageDays).equatable()
+                        }
+                        recentGrowth(overview.recentGrowth)
                         let layout = geometry.size.width >= 835
                             ? AnyLayout(HStackLayout(alignment: .top, spacing: 26))
                             : AnyLayout(VStackLayout(alignment: .leading, spacing: 22))
@@ -74,6 +91,90 @@ struct SpaceOverviewView: View {
         }
     }
 
+    private func recentGrowth(_ growth: RecentGrowth) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Recent File Growth")
+                .font(.headline)
+                .accessibilityAddTraits(.isHeader)
+            if model.loadedGrowthDays != model.storageDays {
+                ProgressView().controlSize(.small)
+                    .accessibilityLabel("Loading Recent File Growth")
+            } else if let since = growth.since {
+                Text("By net increase in allocated size. Files may share disk space.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                if since > Date.now.addingTimeInterval(-Double(model.storageDays) * 86_400) {
+                    Text("Tracking since \(since.formatted(StorageStyle.dateAndTime)).")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                if growth.files.isEmpty {
+                    Text("No files with recorded growth in this period.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    VStack(spacing: 0) {
+                        ForEach(growth.files) { change in
+                            Divider()
+                            growthRow(change)
+                        }
+                    }
+                }
+            } else {
+                Text("File growth will appear here as automatic updates record changes.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func growthRow(_ change: FileGrowth) -> some View {
+        let entry = change.entry
+        let size = StorageStyle.size(change.bytes)
+        return Button {
+            model.reveal(entry.id)
+        } label: {
+            HStack(spacing: 9) {
+                Image(systemName: "doc")
+                    .foregroundStyle(.secondary)
+                    .frame(width: 16)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.name)
+                        .font(.callout.weight(.medium))
+                        .lineLimit(1)
+                    if let parent = entry.parent {
+                        Text(StorageStyle.location(parent))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .truncationMode(.middle)
+                            .lineLimit(1)
+                    }
+                }
+                Spacer()
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text("+\(size)")
+                        .font(.callout.weight(.semibold).monospacedDigit())
+                        .accessibilityLabel("\(size) added")
+                    Text(change.observed.formatted(StorageStyle.dateAndTime))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .fixedSize()
+                Image(systemName: "arrow.up.right")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            }
+            .padding(.vertical, 7)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("Show in Finder")
+        .accessibilityHint("Shows the file in Finder")
+    }
+
     private func ranking(_ title: String, entries: [StorageEntry], folders: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).font(.headline).accessibilityAddTraits(.isHeader)
@@ -127,32 +228,19 @@ struct SpaceOverviewView: View {
 
 private struct StorageHistoryView: View, Equatable {
     let history: [StorageSample]
-    @State private var days = 7
+    let days: Int
     @State private var dateSelection: Date?
 
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.history == rhs.history }
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.days == rhs.days && lhs.history == rhs.history }
 
     var body: some View {
-        let cutoff = Date().addingTimeInterval(-Double(days) * 86_400)
+        let hour = floor(Date.now.timeIntervalSince1970 / 3_600) * 3_600
+        let cutoff = Date(timeIntervalSince1970: hour - Double(days) * 86_400)
         let samples = history.filter { $0.date >= cutoff }
         let active = dateSelection.flatMap { date in
             samples.min { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
         }
         return VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("Storage History").font(.headline).accessibilityAddTraits(.isHeader)
-                Spacer()
-                Picker("Range", selection: $days) {
-                    Text("7 Days").tag(7)
-                    Text("30 Days").tag(30)
-                    Text("90 Days").tag(90)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .fixedSize()
-                .controlSize(.small)
-                .onChange(of: days) { _, _ in dateSelection = nil }
-            }
             if samples.count < 2 {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Storage History Is Building").font(.subheadline.weight(.medium))
@@ -200,6 +288,7 @@ private struct StorageHistoryView: View, Equatable {
                 .accessibilityLabel("Disk Usage Chart")
             }
         }
+        .onChange(of: days) { _, _ in dateSelection = nil }
     }
 
     private func chartDomain(_ samples: [StorageSample]) -> ClosedRange<Int64> {

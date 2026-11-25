@@ -108,7 +108,7 @@ struct DashboardView: View {
                 .help("Settings")
             }
         }
-        .task(id: model.activeSection == .space) { await model.watch() }
+        .task(id: model.activeSection == .space ? model.storageDays : nil) { await model.watch() }
         .task(id: model.deletionNotice?.id) {
             guard let notice = model.deletionNotice else { return }
             AccessibilityNotification.Announcement(notice.message).post()
@@ -156,7 +156,7 @@ struct DashboardView: View {
         case .map:
             return "Explore the files and folders that take up the most space."
         case .space:
-            return "See disk capacity, usage history, and the largest items."
+            return "See disk usage and which files are taking up more space."
         }
     }
 

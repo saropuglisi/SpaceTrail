@@ -13,13 +13,13 @@ public struct IndexReader: Sendable {
         return try meta("revision", db: db)
     }
 
-    public func dashboard(since previous: String?, includeDetails: Bool) throws -> (revision: String?, overview: Overview?) {
+    public func dashboard(since previous: String?, includeDetails: Bool, growthDays: Int = 7) throws -> (revision: String?, overview: Overview?) {
         guard let db = try database() else { return (nil, nil) }
         db.checkCancellation()
         return try db.transaction("BEGIN") {
             let revision = try meta("revision", db: db)
             guard let revision, revision != previous else { return (revision, nil) }
-            return (revision, try overview(in: db, includeDetails: includeDetails))
+            return (revision, try overview(in: db, includeDetails: includeDetails, growthDays: growthDays))
         }
     }
 
@@ -258,7 +258,7 @@ public struct IndexReader: Sendable {
         return try db.transaction("BEGIN") { try overview(in: db, includeDetails: true) }
     }
 
-    private func overview(in db: SQLiteConnection, includeDetails: Bool) throws -> Overview? {
+    private func overview(in db: SQLiteConnection, includeDetails: Bool, growthDays: Int = 7) throws -> Overview? {
         guard let timestamp = try meta("updated", db: db).flatMap(Double.init) else { return nil }
         let lastAudit = try meta("checked", db: db).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
         let visibility = try visibleRows(in: db)
@@ -282,6 +282,7 @@ public struct IndexReader: Sendable {
         }
         var files: [StorageEntry] = []
         var folders: [StorageEntry] = []
+        var growth = RecentGrowth(since: nil, files: [])
         if includeDetails {
             let schema = try IndexSchema.read(from: db)
             var heavyFiles: [IndexedEntry] = []
@@ -293,11 +294,12 @@ public struct IndexReader: Sendable {
             files = try withFootprints(heavyFiles, in: db, measured: measured)
             folders = try withFootprints(FolderRanking.load(from: db, schema: schema, preferFootprints: measured),
                                         in: db, measured: measured)
+            growth = try StorageGrowthIndex.read(from: db, schema: schema, days: growthDays)
         }
         return Overview(indexedFiles: count, indexedBytes: size, gaps: gaps,
                         lastUpdated: Date(timeIntervalSince1970: timestamp), lastAudit: lastAudit,
                         sample: samples.last, history: includeDetails ? samples : [],
-                        largeFiles: files, largeFolders: folders)
+                        largeFiles: files, largeFolders: folders, recentGrowth: growth)
     }
 
     private func withFootprints(_ entries: some Collection<IndexedEntry>, in db: SQLiteConnection,

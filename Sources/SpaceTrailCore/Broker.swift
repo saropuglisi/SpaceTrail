@@ -189,6 +189,7 @@ public final class StorageBroker {
                 try index.set("topology", StartupVolumeLayout.version)
                 try index.set("access", access.rawValue)
                 try index.set("appData", access.scansAppData ? "1" : "0")
+                try index.growth.start()
                 try saveRevision(sample: true)
             }
             try index.db.run("PRAGMA wal_checkpoint(TRUNCATE)")
@@ -225,6 +226,7 @@ public final class StorageBroker {
                 try index.set("access", access.rawValue)
                 try index.set("appData", access.scansAppData ? "1" : "0")
                 try index.set("topology", StartupVolumeLayout.version)
+                try index.growth.start()
                 try saveRevision(sample: true, touchedFiles: topologyChanged)
             }
         }

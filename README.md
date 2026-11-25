@@ -15,7 +15,7 @@
 | **Folders** | Browse folders and see how much space their contents and subfolders use. |
 | **Search** | Find files and folders by name, filter by a preset or custom extension, and use typo tolerance and previews. |
 | **Map** | Explore disk usage in an interactive treemap. Warm colors highlight larger items, and large tiles show the main subfolders. |
-| **Storage** | See disk capacity, usage history, and the largest folders. |
+| **Storage** | See disk capacity, usage history, and which files have added the most space recently. |
 
 Files, Folders, and Search offer list, compact, and grid views. From the Map context menu, you can open a folder in Finder or move eligible personal items to the Trash. SpaceTrail verifies an item’s identity before removing it and asks for confirmation before deleting files or links permanently. System paths, standard home folders, and app bundles are protected.
 
@@ -65,6 +65,7 @@ flowchart LR
 - **Local search.** The filename index powers paginated results. The broker measures disk usage in the background. You can browse the last saved index while updates resume.
 - **Compact paths.** Each directory path is stored once. Its children store a directory reference and a name. Existing indexes are migrated from saved metadata when the Mac is plugged in and enough temporary space is available. The saved index remains readable while the replacement is built.
 - **APFS measurements.** Logical size is the length of a file. **On Disk** shows its allocated size or the estimated size of a folder, accounting for hard links and whole-file APFS clones. **≈** marks an estimate and **≥** marks a measured minimum. Shared blocks and snapshots affect how much space a deletion frees.
+- **Recent file growth.** The broker logs net allocation changes in a bounded rolling history, using the existing index and file events. Storage ranks files still on disk over the selected period. File-level tracking starts with the first run of a compatible broker. Shared blocks can affect the reported sizes.
 - **Local data.** SpaceTrail indexes the startup disk and stores the index and history in `~/Library/Application Support/SpaceTrail`. macOS permissions determine which protected folders it can access.
 
 ## Tests

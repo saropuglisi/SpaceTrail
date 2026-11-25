@@ -160,6 +160,8 @@ final class DashboardModel {
     var showsDetails = false
     var overview: Overview?
     private(set) var overviewIncludesDetails = false
+    var storageDays = 7
+    private(set) var loadedGrowthDays: Int?
     var revision: String?
     var connectionError: String?
     var browseError: String?
@@ -324,10 +326,13 @@ final class DashboardModel {
         }
         do {
             let includeDetails = activeSection == .space
-            let previous = overviewIncludesDetails == includeDetails ? revision : nil
+            let growthDays = storageDays
+            let sameOverview = overviewIncludesDetails == includeDetails
+                && (!includeDetails || loadedGrowthDays == growthDays)
+            let previous = sameOverview ? revision : nil
             let reader = self.reader
             let read = Task.detached(priority: .utility) {
-                try reader.dashboard(since: previous, includeDetails: includeDetails)
+                try reader.dashboard(since: previous, includeDetails: includeDetails, growthDays: growthDays)
             }
             let result = try await withTaskCancellationHandler {
                 try await read.value
@@ -338,6 +343,7 @@ final class DashboardModel {
             if let updated = result.overview {
                 overview = updated
                 overviewIncludesDetails = includeDetails
+                loadedGrowthDays = includeDetails ? growthDays : nil
                 if revision != result.revision { revision = result.revision }
             }
             if result.revision != nil || currentState != nil { connectionError = nil }

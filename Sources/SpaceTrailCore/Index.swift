@@ -89,6 +89,7 @@ final class IndexWriter {
     let schema: IndexSchema
     private let support: URL
     lazy var footprints = FootprintIndex(db: db, schema: schema)
+    lazy var growth = StorageGrowthIndex(db: db, schema: schema)
 
     static let reserve: Int64 = 512 * 1_048_576
 
@@ -162,6 +163,7 @@ final class IndexWriter {
                 CREATE TEMP TABLE seen (name TEXT PRIMARY KEY) WITHOUT ROWID;
                 """)
             try footprints.createTables()
+            try growth.createTables()
             if newIndex { try db.run("PRAGMA user_version = \(schema.rawValue)") }
             if !deferIndexes {
                 try createIndexes()
@@ -544,6 +546,7 @@ final class IndexWriter {
     }
 
     func recordSample(capacity: Int64, available: Int64, now: Date) throws {
+        try growth.prune(at: now)
         let interval: Int = 3_600
         let bucket = Int(now.timeIntervalSince1970) / interval * interval
         let totals = try totals()

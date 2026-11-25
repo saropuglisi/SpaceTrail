@@ -64,6 +64,13 @@ def verify(broker, base):
             FROM indexed_entries e JOIN folder_footprints f ON f.entry_id=e.rowid WHERE e.path = ?
             """, (str(path),))
 
+    def growth(path):
+        return query("""
+            SELECT SUM(g.delta) FROM storage_growth g
+            JOIN indexed_entries e ON e.rowid = g.entry_id AND e.inode = g.inode AND e.created = g.created
+            WHERE e.path = ? GROUP BY e.rowid
+            """, (str(path),))
+
     def wait(condition, description, timeout=25):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -97,6 +104,7 @@ def verify(broker, base):
         assert not row(support)
         assert query("SELECT path FROM gaps") == [(str(hidden),)]
         assert query("SELECT count(*) FROM samples") == [(1,)]
+        assert query("SELECT count(*) FROM storage_growth") == [(0,)]
         assert query("PRAGMA auto_vacuum") == [(2,)]
         if local_build:
             assert not row(private_file)
@@ -110,6 +118,17 @@ def verify(broker, base):
         source.write_bytes(b"x" * 8192)
         wait(lambda: row(source.parent) == [(1, 8192, 1)], "file modification and ancestor totals")
         wait(lambda: usage(source.parent) == [(8192, 0, 1, 0)], "disk usage updates from the broker alone")
+        assert growth(source) == [(4096,)]
+        source.write_bytes(b"x" * 12288)
+        wait(lambda: growth(source) == [(8192,)], "growing a file again records only the new blocks")
+        source.write_bytes(b"x" * 8192)
+        wait(lambda: growth(source) == [(4096,)], "shrinking offsets growth in the selected period")
+
+        clone = root / "clone.txt"
+        subprocess.run(["/bin/cp", "-c", str(source), str(clone)], check=True)
+        wait(lambda: row(clone) == [(0, 8192, 1)], "new APFS clone")
+        assert not growth(clone)
+        clone.unlink()
 
         renamed = root / "destination" / "moved"
         source.parent.rename(renamed)
@@ -120,18 +139,22 @@ def verify(broker, base):
         (renamed / source.name).rename(moved_file)
         wait(lambda: row(moved_file) == [(0, 8192, 1)] and row(renamed) == [(1, 0, 0)],
              "single-file move")
+        assert growth(moved_file) == [(4096,)]
 
         moved_file.unlink()
         wait(lambda: not row(moved_file), "file removal")
+        assert not growth(moved_file)
         assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'ren'") == [(0,)]
 
         created = renamed / "new.txt"
         created.write_bytes(b"b" * 384)
         wait(lambda: row(created) == [(0, 384, 1)], "file creation")
+        assert growth(created) == [(4096,)]
 
         hidden.chmod(0o700)
         wait(lambda: row(hidden / "inaccessible.txt") == [(0, 64, 1)]
              and not query("SELECT path FROM gaps"), "recovery of a newly accessible folder")
+        assert not growth(hidden / "inaccessible.txt")
 
         checkpoint = int(query("SELECT value FROM meta WHERE key = 'event'")[0][0])
         assert checkpoint > 0
@@ -164,6 +187,7 @@ def verify(broker, base):
         process = start()
         wait(lambda: not row(created) and row(offline) == [(0, 768, 1)]
              and row(renamed) == [(1, 768, 1)], "FSEvents resumption after shutdown")
+        assert growth(offline) == [(4096,)]
 
         assert query("SELECT value FROM meta WHERE key = 'baselineAt'") == baseline
         assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'arc'") == [(1,)]

@@ -149,6 +149,12 @@ enum IndexMigration {
             cursor = range.end
         }
         guard copied == (try db.integer("SELECT count(*) FROM legacy.entries")) else { throw invalidCopy() }
+        if try db.integer("SELECT count(*) FROM legacy.sqlite_schema WHERE name = 'storage_growth'") == 1 {
+            try db.run("""
+                INSERT INTO main.storage_growth(inode, created, bucket, entry_id, delta, allocated, observed)
+                SELECT inode, created, bucket, entry_id, delta, allocated, observed FROM legacy.storage_growth ORDER BY id
+                """)
+        }
         // The staging copy preserves entry rowids, including those referenced by measurements.
         for table in FootprintIndex.tables {
             if try db.integer("SELECT count(*) FROM legacy.sqlite_schema WHERE name = ?", [.text(table)]) == 1 {
