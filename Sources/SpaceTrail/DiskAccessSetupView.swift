@@ -49,7 +49,7 @@ struct DiskAccessSetupView: View {
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
                 if openedSettings {
-                    Text("The broker uses this permission to scan the disk. You can also add SpaceTrail for previews and actions on protected files.")
+                    Text("Add SpaceTrail itself for previews in protected folders. For selected folders, use Choose Preview Folders in Settings.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
@@ -57,6 +57,7 @@ struct DiskAccessSetupView: View {
                     if openedSettings {
                         Button("Reopen Settings") { openSettings() }
                         Button("Show Broker in Finder") { model.revealBroker() }
+                        Button("Show App in Finder") { NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL]) }
                     } else {
                         Button("Open System Settings") { openSettings() }
                             .buttonStyle(.borderedProminent)

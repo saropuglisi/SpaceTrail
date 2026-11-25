@@ -15,7 +15,17 @@ struct Totals: Equatable {
     }
 }
 
-let entryColumns = "tree, path, parent, name, name_key, kind, logical, allocated, files, modified, created, inode, mode, links"
+let entryMetadataColumns = "parent, name, name_key, kind, logical, allocated, files, modified, created, inode, mode, links"
+
+struct IndexedEntry {
+    let rowID: Int64
+    let entry: StorageEntry
+
+    init(_ row: OpaquePointer) {
+        rowID = sqlInt(row, 14)
+        entry = indexEntry(row)
+    }
+}
 
 func indexEntry(_ row: OpaquePointer) -> StorageEntry {
     let path = sqlText(row, 1) ?? ""
@@ -47,6 +57,11 @@ extension EntryKey {
         let stem = path == "/" ? "" : path
         return values + [.text(stem + "/"), .text(stem + "0")]
     }
+
+    func directoryRangeValues(startingAt directory: String? = nil) -> [SQLValue] {
+        let stem = path == "/" ? "" : path
+        return [.int(tree.rawValue), .text(directory ?? path), .text(stem + "0"), .text(path), .text(stem + "/")]
+    }
 }
 
 let subtreeWhere = "tree = ? AND (path = ? OR (path >= ? AND path < ?))"
@@ -54,6 +69,11 @@ let subtreeWhere = "tree = ? AND (path = ? OR (path >= ? AND path < ?))"
 func parentPath(_ path: String) -> String? {
     guard path != "/", let separator = path.lastIndex(of: "/") else { return nil }
     return separator == path.startIndex ? "/" : String(path[..<separator])
+}
+
+func pathName(_ path: String) -> String {
+    guard let separator = path.lastIndex(of: "/") else { return path }
+    return String(path[path.index(after: separator)...])
 }
 
 func childPath(_ parent: String, _ child: String) -> String {
@@ -66,33 +86,17 @@ func isWithin(_ path: String, _ base: String) -> Bool {
 
 final class IndexWriter {
     let db: SQLiteConnection
-    let compactParents: Bool
+    let schema: IndexSchema
     private let support: URL
-    lazy var footprints = FootprintIndex(db: db)
+    lazy var footprints = FootprintIndex(db: db, schema: schema)
 
-    static let schemaVersion: Int64 = 1
     static let reserve: Int64 = 512 * 1_048_576
 
-    static func childrenWhere(compact: Bool) -> String {
-        if compact {
-            return "tree = ? AND parent = (SELECT id FROM parent_paths WHERE tree = ? AND path = ?)"
-        }
-        return "tree = ? AND parent = ?"
-    }
-
-    static func childrenValues(_ key: EntryKey, compact: Bool) -> [SQLValue] {
-        compact ? [.int(key.tree.rawValue)] + key.values : key.values
-    }
-
-    init(support: URL) throws {
+    init(support: URL, deferIndexes: Bool = false) throws {
         self.support = support
         db = try SQLiteConnection(SpaceTrailPaths.database(in: support), readOnly: false)
         let newIndex = try db.integer("SELECT count(*) FROM sqlite_schema WHERE name = 'entries'") == 0
-        let version = try db.integer("PRAGMA user_version")
-        guard version <= Self.schemaVersion else {
-            throw SQLiteFailure(code: SQLITE_ERROR, operation: "version", message: "This index requires a newer version of SpaceTrail.")
-        }
-        compactParents = newIndex || version == Self.schemaVersion
+        schema = newIndex ? .current : try IndexSchema.read(from: db)
         if newIndex { try db.run("PRAGMA auto_vacuum = INCREMENTAL") }
         try db.execute("""
             PRAGMA journal_mode = WAL;
@@ -104,19 +108,25 @@ final class IndexWriter {
             PRAGMA temp.cache_size = -2048;
             """)
         try db.transaction("BEGIN IMMEDIATE") {
-            if compactParents {
+            if schema.hasParentReferences {
                 try db.execute("""
                     CREATE TABLE IF NOT EXISTS parent_paths (
                         id INTEGER PRIMARY KEY, tree INTEGER NOT NULL, path TEXT NOT NULL, UNIQUE(tree, path)
                     );
-                    PRAGMA user_version = \(Self.schemaVersion);
                     """)
+            }
+            let location = schema == .directoryReferences ? "directory INTEGER" : "path TEXT NOT NULL"
+            let primaryKey: String
+            switch schema {
+            case .directoryReferences: primaryKey = "id INTEGER PRIMARY KEY"
+            case .compactParents: primaryKey = "id INTEGER PRIMARY KEY, UNIQUE(tree, path)"
+            case .fullPaths: primaryKey = "PRIMARY KEY(tree, path)"
             }
             try db.execute("""
                 CREATE TABLE IF NOT EXISTS entries (
                     tree INTEGER NOT NULL,
-                    path TEXT NOT NULL,
-                    parent \(compactParents ? "INTEGER" : "TEXT"),
+                    \(location),
+                    parent \(schema.hasParentReferences ? "INTEGER" : "TEXT"),
                     name TEXT NOT NULL,
                     name_key TEXT NOT NULL,
                     kind INTEGER NOT NULL,
@@ -128,18 +138,8 @@ final class IndexWriter {
                     inode INTEGER NOT NULL,
                     mode INTEGER NOT NULL,
                     links INTEGER NOT NULL,
-                    \(compactParents ? "id INTEGER PRIMARY KEY, UNIQUE(tree, path)" : "PRIMARY KEY(tree, path)")
+                    \(primaryKey)
                 );
-                CREATE INDEX IF NOT EXISTS children ON entries(tree, parent, logical);
-                CREATE INDEX IF NOT EXISTS file_size ON entries(logical) WHERE kind <> 1;
-                CREATE INDEX IF NOT EXISTS file_allocated ON entries(allocated) WHERE kind <> 1;
-                CREATE INDEX IF NOT EXISTS entry_name ON entries(name_key);
-                DROP INDEX IF EXISTS file_name;
-                CREATE INDEX IF NOT EXISTS file_modified ON entries(modified) WHERE kind <> 1;
-                CREATE INDEX IF NOT EXISTS folder_allocated ON entries(allocated)
-                    WHERE kind = 1 AND parent IS NOT NULL;
-                CREATE INDEX IF NOT EXISTS folder_path ON entries(tree, path) WHERE kind = 1;
-                CREATE INDEX IF NOT EXISTS index_roots ON entries(tree) WHERE parent IS NULL;
                 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL) WITHOUT ROWID;
                 CREATE TABLE IF NOT EXISTS gaps (tree INTEGER, path TEXT, retry_after REAL NOT NULL, PRIMARY KEY(tree, path)) WITHOUT ROWID;
                 CREATE INDEX IF NOT EXISTS gap_retry ON gaps(retry_after, tree, path);
@@ -159,12 +159,46 @@ final class IndexWriter {
                 CREATE TABLE IF NOT EXISTS limited_scopes (
                     tree INTEGER NOT NULL, path TEXT NOT NULL, PRIMARY KEY(tree, path)
                 ) WITHOUT ROWID;
-                CREATE TEMP TABLE seen (path TEXT PRIMARY KEY) WITHOUT ROWID;
+                CREATE TEMP TABLE seen (name TEXT PRIMARY KEY) WITHOUT ROWID;
                 """)
             try footprints.createTables()
+            if newIndex { try db.run("PRAGMA user_version = \(schema.rawValue)") }
+            if !deferIndexes {
+                try createIndexes()
+                try createSearch()
+            }
         }
         // Recover and reclaim any abandoned WAL before building the new index.
         try db.run("PRAGMA wal_checkpoint(TRUNCATE)")
+    }
+
+    func createIndexes() throws {
+        try db.execute("""
+            CREATE INDEX IF NOT EXISTS children ON entries(tree, parent, logical);
+            CREATE INDEX IF NOT EXISTS file_size ON entries(logical) WHERE kind <> 1;
+            CREATE INDEX IF NOT EXISTS file_allocated ON entries(allocated) WHERE kind <> 1;
+            CREATE INDEX IF NOT EXISTS entry_name ON entries(name_key);
+            DROP INDEX IF EXISTS file_name;
+            CREATE INDEX IF NOT EXISTS file_modified ON entries(modified) WHERE kind <> 1;
+            CREATE INDEX IF NOT EXISTS folder_allocated ON entries(allocated)
+                WHERE kind = 1 AND parent IS NOT NULL;
+            """)
+        if schema == .directoryReferences {
+            try db.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS entry_location ON entries(parent, name) WHERE parent IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS folder_path ON entries(directory) WHERE directory IS NOT NULL;
+                CREATE UNIQUE INDEX IF NOT EXISTS index_roots ON entries(tree) WHERE parent IS NULL;
+                """)
+        } else {
+            try db.execute("""
+                CREATE INDEX IF NOT EXISTS folder_path ON entries(tree, path) WHERE kind = 1;
+                CREATE INDEX IF NOT EXISTS index_roots ON entries(tree) WHERE parent IS NULL;
+                """)
+        }
+        try footprints.createIndexes()
+    }
+
+    func createSearch() throws {
         try db.execute("""
             CREATE VIRTUAL TABLE IF NOT EXISTS name_fts USING fts5(
                 name_key, content='entries', tokenize='trigram case_sensitive 1', detail=none, columnsize=0
@@ -191,7 +225,7 @@ final class IndexWriter {
     }
 
     func reclaimSpace() throws {
-        guard compactParents, try db.integer("PRAGMA freelist_count") >= 1_024 else { return }
+        guard schema.hasParentReferences, try db.integer("PRAGMA freelist_count") >= 1_024 else { return }
         try db.run("PRAGMA incremental_vacuum(2048)")
         try db.run("PRAGMA wal_checkpoint(TRUNCATE)")
     }
@@ -212,7 +246,7 @@ final class IndexWriter {
             try db.query("SELECT rowid FROM entries ORDER BY rowid LIMIT 1 OFFSET 8191") { last = sqlInt($0, 0) }
             guard let last else {
                 try db.execute("DELETE FROM entries; DELETE FROM gaps; DELETE FROM pending_scan; DELETE FROM limited_scopes; DELETE FROM pending_repair;")
-                if compactParents { try db.run("DELETE FROM parent_paths") }
+                if schema.hasParentReferences { try db.run("DELETE FROM parent_paths") }
                 break
             }
             try db.run("DELETE FROM entries WHERE rowid <= ?", [.int(last)])
@@ -240,10 +274,11 @@ final class IndexWriter {
 
     func directTotals(_ key: EntryKey) throws -> Totals {
         var result = Totals()
+        let children = schema.children(key)
         try db.query("""
             SELECT COALESCE(sum(logical), 0), COALESCE(sum(allocated), 0), COALESCE(sum(files), 0)
-            FROM entries WHERE \(Self.childrenWhere(compact: compactParents))
-            """, Self.childrenValues(key, compact: compactParents)) {
+            FROM entries e WHERE \(children.predicate)
+            """, children.values) {
             result = Totals(logical: sqlInt($0, 0), allocated: sqlInt($0, 1), files: sqlInt($0, 2))
         }
         return result
@@ -284,7 +319,8 @@ final class IndexWriter {
 
     func entry(_ key: EntryKey) throws -> StorageEntry? {
         var result: StorageEntry?
-        try db.query("SELECT \(entryColumns) FROM entries WHERE tree = ? AND path = ?", key.values) {
+        let location = schema.location(key)
+        try db.query("SELECT \(schema.columns()) FROM entries e WHERE \(location.predicate)", location.values) {
             result = indexEntry($0)
         }
         return result
@@ -293,31 +329,36 @@ final class IndexWriter {
     func insert(_ entry: StorageEntry) throws {
         var parent: SQLValue = .null
         if let path = entry.parent {
-            if compactParents {
-                let key = EntryKey(tree: entry.id.tree, path: path)
-                let lookup = "SELECT id FROM parent_paths WHERE tree = ? AND path = ?"
-                var id = try db.integer(lookup, key.values)
-                if id == 0 {
-                    try db.run("INSERT INTO parent_paths(tree, path) VALUES (?, ?)", key.values)
-                    id = try db.integer(lookup, key.values)
-                }
-                parent = .int(id)
-            } else {
-                parent = .text(path)
-            }
+            parent = schema.hasParentReferences ? .int(try directoryID(EntryKey(tree: entry.id.tree, path: path))) : .text(path)
         }
+        let location: SQLValue
+        if schema == .directoryReferences {
+            location = entry.isFolder || entry.parent == nil ? .int(try directoryID(entry.id)) : .null
+        } else {
+            location = .text(entry.id.path)
+        }
+        let column = schema.locationColumn
         try db.run("""
-            INSERT INTO entries (\(entryColumns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(tree, path) DO UPDATE SET parent=excluded.parent, name=excluded.name,
+            INSERT INTO entries (tree, \(column), \(entryMetadataColumns)) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT DO UPDATE SET \(column)=excluded.\(column), parent=excluded.parent, name=excluded.name,
                 name_key=excluded.name_key, kind=excluded.kind, logical=excluded.logical,
                 allocated=excluded.allocated, files=excluded.files, modified=excluded.modified,
                 created=excluded.created, inode=excluded.inode, mode=excluded.mode, links=excluded.links
-            """, entry.id.values + [
+            """, [
+                .int(entry.id.tree.rawValue), location,
                 parent, .text(entry.name), .text(foldedName(entry.name)),
                 .int(entry.kind.rawValue), .int(entry.logical), .int(entry.allocated), .int(entry.files),
                 .real(entry.modified.timeIntervalSince1970), .real(entry.created.timeIntervalSince1970),
                 .int(entry.inode), .int(entry.mode), .int(entry.links)
             ])
+    }
+
+    private func directoryID(_ key: EntryKey) throws -> Int64 {
+        let lookup = "SELECT id FROM parent_paths WHERE tree = ? AND path = ?"
+        let existing = try db.integer(lookup, key.values)
+        if existing != 0 { return existing }
+        try db.run("INSERT INTO parent_paths(tree, path) VALUES (?, ?)", key.values)
+        return try db.integer(lookup, key.values)
     }
 
     func scheduleRepair(_ key: EntryKey, mode: RepairMode = .walk) throws {
@@ -372,47 +413,63 @@ final class IndexWriter {
     /// A crash between batches leaves that root and its removal job available on restart.
     func prune(_ key: EntryKey) throws {
         let previous = try entry(key)
-        while try deleteDescendants(key, limit: 4_096) == 4_096 {
+        var lastDirectory = key.path == "/" ? "0" : key.path + "0"
+        while try deleteDescendants(key, through: &lastDirectory, limit: 4_096) == 4_096 {
             try finishBatch()
         }
         try deleteEntry(key)
-        if compactParents { try db.run("DELETE FROM parent_paths WHERE \(subtreeWhere)", key.subtreeValues) }
+        if schema.hasParentReferences { try db.run("DELETE FROM parent_paths WHERE \(subtreeWhere)", key.subtreeValues) }
         try deleteGaps(in: key)
         if let previous { try adjustAncestors(of: key, by: Totals() - previous.totals) }
     }
 
-    private func deleteDescendants(_ key: EntryKey, limit: Int64) throws -> Int {
-        let descendants = """
-            SELECT rowid AS entry_id FROM entries WHERE tree = ? AND path <> ? AND path >= ? AND path < ?
-            ORDER BY path DESC LIMIT ?
-            """
-        let values = key.subtreeValues + [.int(limit)]
+    private func deleteDescendants(_ key: EntryKey, through lastDirectory: inout String, limit: Int64) throws -> Int {
+        let descendants: String
+        let values: [SQLValue]
+        if schema == .directoryReferences {
+            descendants = """
+                SELECT e.rowid AS entry_id, \(IndexSchema.childPath) AS path, p.path AS directory_path
+                FROM parent_paths p CROSS JOIN entries e ON e.parent = p.id
+                WHERE \(IndexSchema.directoryRange) AND p.path <= ?
+                ORDER BY p.path DESC, e.name DESC LIMIT ?
+                """
+            values = key.directoryRangeValues() + [.text(lastDirectory), .int(limit)]
+        } else {
+            descendants = """
+                SELECT rowid AS entry_id, path, NULL AS directory_path FROM entries
+                WHERE tree = ? AND path <> ? AND path >= ? AND path < ? ORDER BY path DESC LIMIT ?
+                """
+            values = key.subtreeValues + [.int(limit)]
+        }
         var removed: [FootprintIndex.Change] = []
         try db.query("""
-            SELECT e.rowid, e.path FROM (\(descendants)) d
-            JOIN file_footprints f ON f.entry_id = d.entry_id
-            JOIN entries e ON e.rowid = f.entry_id
+            SELECT d.entry_id, d.path, d.directory_path, f.entry_id IS NOT NULL
+            FROM (\(descendants)) d LEFT JOIN file_footprints f ON f.entry_id = d.entry_id
+            ORDER BY d.directory_path DESC
             """, values) {
-            if let path = sqlText($0, 1) {
+            if let directory = sqlText($0, 2) { lastDirectory = directory }
+            if sqlInt($0, 3) != 0, let path = sqlText($0, 1) {
                 removed.append(.init(rowID: sqlInt($0, 0), key: EntryKey(tree: key.tree, path: path), footprint: nil))
             }
         }
         try footprints.apply(removed, trackPeers: true)
-        try db.run("DELETE FROM entries WHERE rowid IN (\(descendants))", values)
+        try db.run("DELETE FROM entries WHERE rowid IN (SELECT entry_id FROM (\(descendants)))", values)
         return db.changes
     }
 
     func forgetFootprint(_ key: EntryKey, trackPeers: Bool = true) throws {
+        let location = schema.location(key)
         let id = try db.integer("""
             SELECT f.entry_id FROM entries e JOIN file_footprints f ON f.entry_id = e.rowid
-            WHERE e.tree = ? AND e.path = ?
-            """, key.values)
+            WHERE \(location.predicate)
+            """, location.values)
         if id != 0 { try footprints.apply([.init(rowID: id, key: key, footprint: nil)], trackPeers: trackPeers) }
     }
 
     func deleteEntry(_ key: EntryKey, trackPeers: Bool = true) throws {
         try forgetFootprint(key, trackPeers: trackPeers)
-        try db.run("DELETE FROM entries WHERE tree = ? AND path = ?", key.values)
+        let location = schema.location(key)
+        try db.run("DELETE FROM entries AS e WHERE \(location.predicate)", location.values)
     }
 
     private func deleteGaps(in key: EntryKey) throws {
@@ -423,13 +480,11 @@ final class IndexWriter {
         guard delta != Totals(), key.path != key.tree.root else { return }
         var next = parentPath(key.path)
         while let parent = next, isWithin(parent, key.tree.root) {
+            let location = schema.location(EntryKey(tree: key.tree, path: parent))
             try db.run("""
-                UPDATE entries SET logical = logical + ?, allocated = allocated + ?, files = files + ?
-                WHERE tree = ? AND path = ?
-                """, [
-                    .int(delta.logical), .int(delta.allocated), .int(delta.files),
-                    .int(key.tree.rawValue), .text(parent)
-                ])
+                UPDATE entries AS e SET logical = logical + ?, allocated = allocated + ?, files = files + ?
+                WHERE \(location.predicate)
+                """, [.int(delta.logical), .int(delta.allocated), .int(delta.files)] + location.values)
             next = parentPath(parent)
         }
     }
@@ -458,8 +513,11 @@ final class IndexWriter {
 
     func auditPaths(after path: String, limit: Int64) throws -> [String] {
         var result: [String] = []
-        try db.query("SELECT path FROM entries WHERE tree = 0 AND kind = 1 AND path > ? ORDER BY path LIMIT ?",
-                     [.text(path), .int(limit)]) { row in
+        let query = schema == .directoryReferences ? """
+            SELECT p.path FROM parent_paths p CROSS JOIN entries e ON e.directory = p.id
+            WHERE p.tree = 0 AND p.path > ? AND e.kind = 1 ORDER BY p.path LIMIT ?
+            """ : "SELECT path FROM entries WHERE tree = 0 AND kind = 1 AND path > ? ORDER BY path LIMIT ?"
+        try db.query(query, [.text(path), .int(limit)]) { row in
             if let path = sqlText(row, 0) { result.append(path) }
         }
         return result
@@ -467,11 +525,12 @@ final class IndexWriter {
 
     func missingChildren(_ key: EntryKey) throws -> [String] {
         var result: [String] = []
+        let children = schema.children(key)
         try db.query("""
-            SELECT path FROM entries WHERE \(Self.childrenWhere(compact: compactParents))
-            AND NOT EXISTS (SELECT 1 FROM seen WHERE seen.path = entries.path) LIMIT 256
-            """, Self.childrenValues(key, compact: compactParents)) { row in
-            if let path = sqlText(row, 0) { result.append(path) }
+            SELECT e.name FROM entries e WHERE \(children.predicate)
+            AND NOT EXISTS (SELECT 1 FROM seen WHERE seen.name = e.name) LIMIT 256
+            """, children.values) { row in
+            if let name = sqlText(row, 0) { result.append(name) }
         }
         return result
     }

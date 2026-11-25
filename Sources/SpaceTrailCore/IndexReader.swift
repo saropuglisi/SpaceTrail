@@ -57,43 +57,65 @@ public struct IndexReader: Sendable {
                       offset: Int, limit: Int, rankMeasuredFoldersOnly: Bool = false,
                       filters: SearchFilters = SearchFilters()) throws -> EntryPage {
         let measured = try FootprintIndex.isAvailable(in: db)
-        if case .search = scope {
+        let schema = try IndexSchema.read(from: db)
+        let format = FormatFilter(filters.format)
+        if case .search = scope, format == nil || filters.kind == .folders ||
+            !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return try searchPage(db: db, text: search, sort: sort, ascending: ascending,
-                                  offset: offset, limit: limit, measured: measured, filters: filters)
+                                  offset: offset, limit: limit, measured: measured, schema: schema, filters: filters, format: format)
         }
-        let predicate: String
+        var conditions: [String]
         var values: [SQLValue]
+        var source = "entries e"
+        let mixed: Bool
         let visibility = try visibleRows(in: db)
         switch scope {
-        case .search:
-            return EntryPage(rows: [], hasMore: false)
-        case .files:
-            predicate = "kind <> 1" + visibility
+        case .search, .files:
+            mixed = false
+            conditions = ["e.kind <> 1" + visibility]
             values = []
+            if let format {
+                conditions.append(format.predicate)
+                values = format.values
+                // Sparse formats can use the existing index. Common ones benefit from
+                // walking the requested sort index until a full page has been found.
+                if let match = format.indexedMatch, try meta("searchComplete", db: db) == "1",
+                   try db.integer("SELECT count(*) FROM (SELECT 1 FROM name_fts WHERE name_fts MATCH ? LIMIT 8192)",
+                                  [.text(match)]) < 8192 {
+                    source = "name_fts CROSS JOIN entries e ON e.rowid = name_fts.rowid"
+                    conditions.append("name_fts MATCH ?")
+                    values.append(.text(match))
+                }
+            }
         case .children(let key):
             if key.tree == .system && !visibility.isEmpty { return EntryPage(rows: [], hasMore: false) }
-            let compact = try db.integer("PRAGMA user_version") == IndexWriter.schemaVersion
-            predicate = IndexWriter.childrenWhere(compact: compact)
-            values = IndexWriter.childrenValues(key, compact: compact)
+            mixed = true
+            let children = schema.children(key)
+            conditions = [children.predicate]
+            values = children.values
         }
         let term = foldedName(search.trimmingCharacters(in: .whitespacesAndNewlines))
-        let filter = term.isEmpty ? "" : " AND instr(name_key, ?) > 0"
-        if !term.isEmpty { values.append(.text(term)) }
-        let column = sortColumn(sort, entries: "entries", mixed: scope != .files, measured: measured,
+        if !term.isEmpty {
+            conditions.append("instr(e.name_key, ?) > 0")
+            values.append(.text(term))
+        }
+        let column = sortColumn(sort, entries: "e", mixed: mixed, measured: measured,
                                 rankMeasuredFoldersOnly: rankMeasuredFoldersOnly)
         let direction = ascending ? "ASC" : "DESC"
         let count = min(max(1, limit), 500)
         values += [.int(Int64(count + 1)), .int(Int64(max(0, offset)))]
-        var rows: [StorageEntry] = []
+        var rows: [IndexedEntry] = []
         try db.query("""
-            SELECT \(entryColumns) FROM entries WHERE \(predicate)\(filter)
-            ORDER BY \(column) \(direction), rowid \(direction) LIMIT ? OFFSET ?
-            """, values) { rows.append(indexEntry($0)) }
+            SELECT \(schema.columns()) FROM \(source) WHERE \(conditions.joined(separator: " AND "))
+            ORDER BY \(column) \(direction), e.rowid \(direction) LIMIT ? OFFSET ?
+            """, values) { rows.append(IndexedEntry($0)) }
         return EntryPage(rows: try withFootprints(rows.prefix(count), in: db, measured: measured), hasMore: rows.count > count)
     }
 
     private func searchPage(db: SQLiteConnection, text: String, sort: EntrySort, ascending: Bool,
-                            offset: Int, limit: Int, measured: Bool, filters: SearchFilters) throws -> EntryPage {
+                            offset: Int, limit: Int, measured: Bool, schema: IndexSchema,
+                            filters: SearchFilters, format: FormatFilter?) throws -> EntryPage {
+        if format != nil, filters.kind == .folders { return EntryPage(rows: [], hasMore: false) }
         let folded = foldedName(String(text.prefix(512)))
         let tokens = folded.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !tokens.isEmpty else { return EntryPage(rows: [], hasMore: false) }
@@ -111,21 +133,26 @@ public struct IndexReader: Sendable {
             }
         }
         var conditions = ["e.parent IS NOT NULL"]
-        switch filters.kind {
+        switch format == nil ? filters.kind : .files {
         case .all: break
         case .files: conditions.append("e.kind <> 1")
         case .folders: conditions.append("e.kind = 1")
         }
         if try !visibleRows(in: db).isEmpty { conditions.append("e.tree = 0") }
+        if let format { conditions.append(format.predicate) }
         let basePredicate = conditions.joined(separator: " AND ")
-        let match = grams.sorted().map(ftsTerm).joined(separator: " AND ")
+        let formatValues = format?.values ?? []
+        var match = grams.sorted().map(ftsTerm).joined(separator: " AND ")
+        if !match.isEmpty, let indexedMatch = format?.indexedMatch {
+            match += " AND (\(indexedMatch))"
+        }
         let wordValues = words.map(SQLValue.text)
         let direction = ascending ? "ASC" : "DESC"
-        let column = sortColumn(sort, entries: "e", mixed: true, measured: measured)
+        let column = sortColumn(sort, entries: "e", mixed: format == nil, measured: measured)
         let count = min(max(1, limit), 500)
         let bounds: [SQLValue] = [.int(Int64(count + 1)), .int(Int64(max(0, offset)))]
-        let columns = entryColumns.split(separator: " ").map { "e." + $0 }.joined(separator: " ")
-        var rows: [StorageEntry] = []
+        let columns = schema.columns()
+        var rows: [IndexedEntry] = []
         if !match.isEmpty, sort == .name, offset <= count * 2,
            try db.integer("SELECT count(*) FROM (SELECT 1 FROM name_fts WHERE name_fts MATCH ? LIMIT 8192)",
                           [.text(match)]) == 8192 {
@@ -139,11 +166,14 @@ public struct IndexReader: Sendable {
                     ORDER BY name_key \(direction), rowid \(direction) LIMIT 65536
                 ), matches AS MATERIALIZED (
                     SELECT entry_id, name_key FROM names WHERE \(terms)
+                ), hits AS MATERIALIZED (
+                    SELECT m.entry_id, m.name_key FROM matches m CROSS JOIN entries e ON e.rowid = m.entry_id
+                    WHERE \(conditions.joined(separator: " AND "))
+                    ORDER BY m.name_key \(direction), m.entry_id \(direction) LIMIT ? OFFSET ?
                 )
-                SELECT \(columns) FROM matches m CROSS JOIN entries e ON e.rowid = m.entry_id
-                WHERE \(conditions.joined(separator: " AND "))
-                ORDER BY m.name_key \(direction), m.entry_id \(direction) LIMIT ? OFFSET ?
-                """, wordValues + bounds) { rows.append(indexEntry($0)) }
+                SELECT \(columns) FROM hits CROSS JOIN entries e ON e.rowid = hits.entry_id
+                ORDER BY hits.name_key \(direction), hits.entry_id \(direction)
+                """, wordValues + formatValues + bounds) { rows.append(IndexedEntry($0)) }
             if rows.count > count {
                 return EntryPage(rows: try withFootprints(rows.prefix(count), in: db, measured: measured), hasMore: true)
             }
@@ -151,15 +181,15 @@ public struct IndexReader: Sendable {
         }
 
         let source: String
-        var values: [SQLValue]
+        var values = formatValues
         if match.isEmpty {
             source = "entries e"
             conditions += ["e.name_key >= ?", "e.name_key < ?"]
-            values = [.text(first), .text(first + "\u{10FFFF}")]
+            values += [.text(first), .text(first + "\u{10FFFF}")]
         } else {
             source = "name_fts CROSS JOIN entries e ON e.rowid = name_fts.rowid"
             conditions.append("name_fts MATCH ?")
-            values = [.text(match)]
+            values.append(.text(match))
         }
         conditions += words.map { _ in "instr(e.name_key, ?) > 0" }
         try db.query("""
@@ -170,22 +200,22 @@ public struct IndexReader: Sendable {
             )
             SELECT \(columns) FROM hits JOIN entries e ON e.rowid = hits.entry_id
             ORDER BY hits.sort_key \(direction), hits.entry_id \(direction)
-            """, values + wordValues + bounds) { rows.append(indexEntry($0)) }
+            """, values + wordValues + bounds) { rows.append(IndexedEntry($0)) }
         var similarNames = Set<EntryKey>()
         if filters.similar, offset == 0, rows.count < min(count, 6),
            let similarity = SimilarNames(tokens.joined(separator: " ")) {
-            let exact = Set(rows.map(\.id))
+            let exact = Set(rows.map { $0.entry.id })
             let limit = min(count - rows.count, 12)
-            let ids = try similarity.candidates(in: db, where: basePredicate, limit: limit + rows.count)
+            let ids = try similarity.candidates(in: db, where: basePredicate, bindings: formatValues, limit: limit + rows.count)
             if !ids.isEmpty {
                 let ranked = ids.indices.map { "(?, \($0))" }.joined(separator: ", ")
                 try db.query("""
                     WITH ranked(id, priority) AS (VALUES \(ranked))
                     SELECT \(columns) FROM ranked CROSS JOIN entries e ON e.rowid = ranked.id ORDER BY ranked.priority
                     """, ids.map(SQLValue.int)) { row in
-                        let entry = indexEntry(row)
-                        guard !exact.contains(entry.id), similarNames.count < limit else { return }
-                        similarNames.insert(entry.id)
+                        let entry = IndexedEntry(row)
+                        guard !exact.contains(entry.entry.id), similarNames.count < limit else { return }
+                        similarNames.insert(entry.entry.id)
                         rows.append(entry)
                     }
             }
@@ -212,9 +242,11 @@ public struct IndexReader: Sendable {
         guard let db = try database() else { return nil }
         return try db.transaction("BEGIN") {
             if key.tree == .system, try !visibleRows(in: db).isEmpty { return nil }
-            var entry: StorageEntry?
-            try db.query("SELECT \(entryColumns) FROM entries WHERE tree = ? AND path = ?", key.values) {
-                entry = indexEntry($0)
+            let schema = try IndexSchema.read(from: db)
+            let location = schema.location(key)
+            var entry: IndexedEntry?
+            try db.query("SELECT \(schema.columns()) FROM entries e WHERE \(location.predicate)", location.values) {
+                entry = IndexedEntry($0)
             }
             guard let entry else { return nil }
             return try withFootprints([entry], in: db, measured: FootprintIndex.isAvailable(in: db)).first
@@ -251,13 +283,15 @@ public struct IndexReader: Sendable {
         var files: [StorageEntry] = []
         var folders: [StorageEntry] = []
         if includeDetails {
+            let schema = try IndexSchema.read(from: db)
+            var heavyFiles: [IndexedEntry] = []
             try db.query("""
-                SELECT \(entryColumns) FROM entries WHERE kind <> 1\(visibility)
-                ORDER BY allocated DESC, rowid DESC LIMIT 8
-                """) { files.append(indexEntry($0)) }
+                SELECT \(schema.columns()) FROM entries e WHERE kind <> 1\(visibility)
+                ORDER BY allocated DESC, e.rowid DESC LIMIT 8
+                """) { heavyFiles.append(IndexedEntry($0)) }
             let measured = try FootprintIndex.isAvailable(in: db)
-            files = try withFootprints(files, in: db, measured: measured)
-            folders = try withFootprints(FolderRanking.load(from: db, preferFootprints: measured),
+            files = try withFootprints(heavyFiles, in: db, measured: measured)
+            folders = try withFootprints(FolderRanking.load(from: db, schema: schema, preferFootprints: measured),
                                         in: db, measured: measured)
         }
         return Overview(indexedFiles: count, indexedBytes: size, gaps: gaps,
@@ -266,11 +300,11 @@ public struct IndexReader: Sendable {
                         largeFiles: files, largeFolders: folders)
     }
 
-    private func withFootprints(_ entries: some Collection<StorageEntry>, in db: SQLiteConnection,
+    private func withFootprints(_ entries: some Collection<IndexedEntry>, in db: SQLiteConnection,
                                 measured: Bool) throws -> [StorageEntry] {
-        guard measured else { return Array(entries) }
+        guard measured else { return entries.map(\.entry) }
         return try entries.map { entry in
-            var result = entry
+            var result = entry.entry
             result.footprint = try FootprintIndex.read(entry, from: db)
             return result
         }

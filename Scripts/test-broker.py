@@ -16,6 +16,15 @@ RESUME_DOCUMENT = "Café Final.pdf"
 RESUME_DOCUMENT_MATCH = "caf AND afe AND pdf"
 
 
+def expose_paths(connection, source="main"):
+    connection.execute(f"""
+        CREATE TEMP VIEW indexed_entries AS
+        SELECT e.rowid AS rowid, e.*, CASE WHEN e.parent IS NULL THEN p.path
+            WHEN p.path = '/' THEN '/' || e.name ELSE p.path || '/' || e.name END AS path
+        FROM {source}.entries e JOIN {source}.parent_paths p ON p.id = coalesce(e.parent, e.directory)
+        """)
+
+
 def verify(broker, base):
     root = base / "root"
     support = root / "index"
@@ -43,15 +52,16 @@ def verify(broker, base):
 
     def query(sql, parameters=()):
         with closing(sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True)) as connection:
+            expose_paths(connection)
             return connection.execute(sql, parameters).fetchall()
 
     def row(path):
-        return query("SELECT kind, logical, files FROM entries WHERE path = ?", (str(path),))
+        return query("SELECT kind, logical, files FROM indexed_entries WHERE path = ?", (str(path),))
 
     def usage(path):
         return query("""
             SELECT f.exclusive, f.shared, f.measured, f.incomplete
-            FROM entries e JOIN folder_footprints f ON f.entry_id=e.rowid WHERE e.path = ?
+            FROM indexed_entries e JOIN folder_footprints f ON f.entry_id=e.rowid WHERE e.path = ?
             """, (str(path),))
 
     def wait(condition, description, timeout=25):
@@ -77,7 +87,7 @@ def verify(broker, base):
     process = start()
     try:
         wait(lambda: json.loads(status.read_text())["phase"] == "monitoring", "first scan")
-        assert row(source) == [(0, 2048, 1)], (source, query("SELECT path, kind, logical FROM entries"))
+        assert row(source) == [(0, 2048, 1)], (source, query("SELECT path, kind, logical FROM indexed_entries"))
         assert row(source.parent) == [(1, 2048, 1)]
         assert query("""
             SELECT e.name FROM name_fts JOIN entries e ON e.rowid = name_fts.rowid
@@ -137,12 +147,14 @@ def verify(broker, base):
                 DROP TABLE name_fts;
                 DELETE FROM meta WHERE key IN ('searchComplete', 'searchCursor', 'topology');
                 INSERT INTO parent_paths(tree, path) VALUES (1, '/'), (1, '/Users');
-                INSERT INTO entries(tree, path, parent, name, name_key, kind, logical, allocated,
+                INSERT INTO entries(tree, directory, parent, name, name_key, kind, logical, allocated,
                                     files, modified, created, inode, mode, links) VALUES
-                  (1, '/', NULL, 'System', 'system', 1, 2048, 4096, 1, 0, 0, 2, 0, 1),
-                  (1, '/Users', (SELECT id FROM parent_paths WHERE tree=1 AND path='/'),
+                  (1, (SELECT id FROM parent_paths WHERE tree=1 AND path='/'),
+                   NULL, 'System', 'system', 1, 2048, 4096, 1, 0, 0, 2, 0, 1),
+                  (1, (SELECT id FROM parent_paths WHERE tree=1 AND path='/Users'),
+                   (SELECT id FROM parent_paths WHERE tree=1 AND path='/'),
                    'Users', 'users', 1, 2048, 4096, 1, 0, 0, 3, 0, 1),
-                  (1, '/Users/archive.txt', (SELECT id FROM parent_paths WHERE tree=1 AND path='/Users'),
+                  (1, NULL, (SELECT id FROM parent_paths WHERE tree=1 AND path='/Users'),
                    'archive.txt', 'archive.txt', 0, 2048, 4096, 1, 0, 0, 4, 0, 1);
                 """)
         created.unlink()
@@ -204,11 +216,11 @@ def verify(broker, base):
         assert query("SELECT count(*) FROM pending_repair") == [(0,)]
         assert query("PRAGMA quick_check") == [("ok",)]
         assert query("""
-            SELECT e.path FROM entries e LEFT JOIN parent_paths p ON p.tree=e.tree AND p.path=e.path
+            SELECT e.path FROM indexed_entries e
             WHERE e.kind = 1 AND
-            (e.logical <> (SELECT coalesce(sum(c.logical), 0) FROM entries c WHERE c.tree=e.tree AND c.parent=p.id)
-            OR e.allocated <> (SELECT coalesce(sum(c.allocated), 0) FROM entries c WHERE c.tree=e.tree AND c.parent=p.id)
-            OR e.files <> (SELECT coalesce(sum(c.files), 0) FROM entries c WHERE c.tree=e.tree AND c.parent=p.id))
+            (e.logical <> (SELECT coalesce(sum(c.logical), 0) FROM entries c WHERE c.parent=e.directory)
+            OR e.allocated <> (SELECT coalesce(sum(c.allocated), 0) FROM entries c WHERE c.parent=e.directory)
+            OR e.files <> (SELECT coalesce(sum(c.files), 0) FROM entries c WHERE c.parent=e.directory))
             """) == []
     finally:
         hidden.chmod(0o700)
@@ -279,10 +291,11 @@ def verify_resume(broker, base):
         if process.poll() is None:
             process.terminate()
             process.wait(timeout=5)
-    verify_migration(broker, root, support, environment)
+    for version in (0, 1):
+        verify_migration(broker, root, support, environment, version)
 
 
-def verify_migration(broker, root, support, environment):
+def verify_migration(broker, root, support, environment, version):
     database = support / "index.sqlite"
     legacy = support / "legacy.sqlite"
     sample = (int(time.time()) // 3600 * 3600 - 48 * 3600, 10000, 5000, 1000)
@@ -291,25 +304,38 @@ def verify_migration(broker, root, support, environment):
 
     with closing(sqlite3.connect(legacy)) as connection:
         connection.execute("ATTACH DATABASE ? AS modern", (str(database),))
-        connection.executescript("""
+        expose_paths(connection, "modern")
+        matching_documents = connection.execute("""
+            SELECT e.rowid, e.path FROM modern.name_fts JOIN indexed_entries e ON e.rowid=name_fts.rowid
+            WHERE name_fts MATCH ? ORDER BY e.rowid
+            """, (RESUME_DOCUMENT_MATCH,)).fetchall()
+        assert any(path == str(root / "00" / RESUME_DOCUMENT) for _, path in matching_documents)
+        if version == 1:
+            (schema,) = connection.execute("SELECT sql FROM modern.sqlite_schema WHERE name = 'parent_paths'").fetchone()
+            connection.execute(schema)
+            connection.execute("INSERT INTO main.parent_paths SELECT * FROM modern.parent_paths")
+        connection.executescript(f"""
             CREATE TABLE entries (
-                tree INTEGER NOT NULL, path TEXT NOT NULL, parent TEXT, name TEXT NOT NULL,
+                tree INTEGER NOT NULL, path TEXT NOT NULL, parent {'INTEGER' if version == 1 else 'TEXT'}, name TEXT NOT NULL,
                 name_key TEXT NOT NULL, kind INTEGER NOT NULL, logical INTEGER NOT NULL,
                 allocated INTEGER NOT NULL, files INTEGER NOT NULL, modified REAL NOT NULL,
                 created REAL NOT NULL, inode INTEGER NOT NULL, mode INTEGER NOT NULL,
-                links INTEGER NOT NULL, PRIMARY KEY(tree, path)
+                links INTEGER NOT NULL, {'id INTEGER PRIMARY KEY, UNIQUE(tree, path)' if version == 1 else 'PRIMARY KEY(tree, path)'}
             );
             INSERT INTO entries(rowid, tree, path, parent, name, name_key, kind, logical, allocated,
                                 files, modified, created, inode, mode, links)
-            SELECT e.rowid, e.tree, e.path, p.path, e.name, e.name_key, e.kind, e.logical,
+            SELECT e.rowid, e.tree, e.path, {'e.parent' if version == 1 else 'p.path'}, e.name, e.name_key, e.kind, e.logical,
                    e.allocated, e.files, e.modified, e.created, e.inode, e.mode, e.links
-            FROM modern.entries e LEFT JOIN modern.parent_paths p ON p.id = e.parent;
+            FROM indexed_entries e LEFT JOIN modern.parent_paths p ON p.id = e.parent;
+            PRAGMA user_version = {version};
             """)
         indexes = connection.execute("""
             SELECT sql FROM modern.sqlite_schema WHERE type = 'index' AND tbl_name = 'entries' AND sql IS NOT NULL
+            AND name NOT IN ('folder_path', 'entry_location')
             """).fetchall()
         for (sql,) in indexes:
             connection.execute(sql)
+        connection.execute("CREATE INDEX folder_path ON entries(tree, path) WHERE kind = 1")
         for table in ["meta", "samples", "gaps", "limited_scopes", "pending_scan", "pending_repair",
                       "file_footprints", "folder_footprints", "folder_shares", "footprint_priority", "footprint_peers"]:
             (schema,) = connection.execute("SELECT sql FROM modern.sqlite_schema WHERE name = ?", (table,)).fetchone()
@@ -321,9 +347,10 @@ def verify_migration(broker, root, support, environment):
             );
             INSERT INTO name_fts(name_fts) VALUES ('rebuild');
             """)
-        connection.execute("INSERT INTO samples VALUES (?, ?, ?, ?)", sample)
+        connection.execute("INSERT OR REPLACE INTO samples VALUES (?, ?, ?, ?)", sample)
         connection.commit()
         baseline = connection.execute("SELECT value FROM meta WHERE key='baselineAt'").fetchone()
+        connection.execute("DROP VIEW indexed_entries")
         connection.execute("DETACH DATABASE modern")
         connection.execute("VACUUM")
         legacy_compact_bytes = legacy.stat().st_size
@@ -333,6 +360,8 @@ def verify_migration(broker, root, support, environment):
             DROP TABLE discarded;
             """)
         assert connection.execute("PRAGMA freelist_count").fetchone()[0] > 1000
+        if version == 1:
+            assert connection.execute("PRAGMA journal_mode = WAL").fetchone() == ("wal",)
     old_bytes = legacy.stat().st_size
     legacy.replace(database)
 
@@ -347,34 +376,57 @@ def verify_migration(broker, root, support, environment):
             time.sleep(0.15)
         assert state["pid"] == process.pid and state["phase"] == "monitoring", state
         with closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)) as connection:
-            assert connection.execute("PRAGMA user_version").fetchone() == (1,)
+            expose_paths(connection)
+            assert connection.execute("PRAGMA user_version").fetchone() == (2,)
             assert connection.execute("SELECT value FROM meta WHERE key='baselineAt'").fetchone() == baseline
             assert connection.execute("SELECT * FROM samples WHERE date=?", sample[:1]).fetchone() == sample
             assert connection.execute("""
-                SELECT e.path FROM name_fts JOIN entries e ON e.rowid=name_fts.rowid
-                WHERE name_fts MATCH ?
-                """, (RESUME_DOCUMENT_MATCH,)).fetchall() == [(str(root / "00" / RESUME_DOCUMENT),)]
+                SELECT e.rowid, e.path FROM name_fts JOIN indexed_entries e ON e.rowid=name_fts.rowid
+                WHERE name_fts MATCH ? ORDER BY e.rowid
+                """, (RESUME_DOCUMENT_MATCH,)).fetchall() == matching_documents
             assert connection.execute("""
-                SELECT count(*) FROM entries e LEFT JOIN parent_paths p ON p.id=e.parent
-                WHERE e.parent IS NOT NULL AND (p.id IS NULL OR p.tree <> e.tree)
+                SELECT count(*) FROM entries e
+                LEFT JOIN parent_paths p ON p.id=e.parent
+                LEFT JOIN parent_paths d ON d.id=e.directory
+                WHERE (e.parent IS NOT NULL AND (p.id IS NULL OR p.tree <> e.tree))
+                   OR ((e.kind = 1 OR e.parent IS NULL) AND (d.id IS NULL OR d.tree <> e.tree))
                 """).fetchone() == (0,)
         assert database.stat().st_size < legacy_compact_bytes, (database.stat().st_size, legacy_compact_bytes)
-        print(f"Fixture compaction · {old_bytes:,} → {database.stat().st_size:,} bytes "
+        print(f"Fixture compaction from v{version} · {old_bytes:,} → {database.stat().st_size:,} bytes "
               f"(compacted legacy format · {legacy_compact_bytes:,} bytes).")
-        added = root / "Café Migrated.pdf"
+        added = root / f"Café Migrated v{version}.pdf"
         added.write_bytes(b"abc")
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             with closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)) as connection:
+                expose_paths(connection)
                 result = connection.execute("""
-                    SELECT e.path FROM name_fts JOIN entries e ON e.rowid=name_fts.rowid
-                    WHERE name_fts MATCH 'mig AND gra AND pdf'
-                    """).fetchall()
+                    SELECT e.path FROM name_fts JOIN indexed_entries e ON e.rowid=name_fts.rowid
+                    WHERE name_fts MATCH 'mig AND gra AND pdf' AND e.name = ?
+                    """, (added.name,)).fetchall()
                 if result == [(str(added),)]:
                     break
             time.sleep(0.15)
         else:
             raise AssertionError("FSEvents and search after migration")
+        if version == 1:
+            # A deletion that spans several commits must leave a similarly named sibling alone.
+            sibling = root / "01-neighbour"
+            sibling.mkdir()
+            (sibling / "keep.txt").write_text("keep")
+            (root / "01").rename(root.parent / "retired")
+            deadline = time.monotonic() + 25
+            while time.monotonic() < deadline:
+                with closing(sqlite3.connect(f"{database.as_uri()}?mode=ro", uri=True)) as connection:
+                    expose_paths(connection)
+                    paths = connection.execute("""
+                        SELECT path FROM indexed_entries WHERE path IN (?, ?, ?)
+                        """, (str(root / "01"), str(root / "01" / "file-1.txt"), str(sibling / "keep.txt"))).fetchall()
+                    if paths == [(str(sibling / "keep.txt"),)]:
+                        break
+                time.sleep(0.15)
+            else:
+                raise AssertionError("multi-batch subtree deletion with directory references")
     finally:
         if process.poll() is None:
             process.terminate()

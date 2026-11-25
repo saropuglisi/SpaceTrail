@@ -11,9 +11,9 @@
 
 | View | What you can do |
 | --- | --- |
-| **Files** | Sort indexed files by disk usage, name, logical size, or modification date. |
+| **Files** | Filter by file format and sort indexed files by disk usage, name, logical size, or modification date. |
 | **Folders** | Browse folders and see how much space their contents and subfolders use. |
-| **Search** | Find files and folders by name or extension, with filters, typo tolerance, and previews. |
+| **Search** | Find files and folders by name, filter by a preset or custom extension, and use typo tolerance and previews. |
 | **Map** | Explore disk usage in an interactive treemap. Warm colors highlight larger items, and large tiles show the main subfolders. |
 | **Storage** | See disk capacity, usage history, and the largest folders. |
 
@@ -30,7 +30,9 @@ Files, Folders, and Search offer list, compact, and grid views. From the Map con
 | **⌘↑** | Go to the parent folder. |
 | **⌘-click** / **⇧-click** | Add an item or a range to the selection. |
 
-Previews include images, documents, MP4 and MOV video frames, and embedded audio artwork. For a protected personal folder, **Allow Previews…** opens the macOS folder picker so you can enable previews for the current session.
+Previews include images, documents, embedded EPUB covers, MP4 and MOV video frames, and embedded audio artwork. Use **Allow Previews…** in Search to select a folder shown in the results. Access includes its subfolders and is saved across launches when macOS permits it. You can manage your selection in Settings.
+
+The window also handles side buttons mapped to **⌘[** and **⌘]** by a mouse utility.
 
 </details>
 
@@ -47,6 +49,8 @@ Choose a disk access mode on first launch. **Limited Access** indexes accessible
 
 The build script signs the local app ad hoc. Set `SPACETRAIL_SIGN_IDENTITY` before building to use an existing signing identity. macOS may ask you to confirm access again after an ad hoc rebuild.
 
+If macOS refuses to start the background helper from a build folder inside Documents, copy `SpaceTrail.app` to `~/Applications` and open it there.
+
 ## Architecture
 
 ```mermaid
@@ -59,6 +63,7 @@ flowchart LR
 
 - **Resumable scans.** The broker saves index changes and checkpoints in batches. It uses FSEvents to update affected paths and checks folders on a rotating schedule.
 - **Local search.** The filename index powers paginated results. The broker measures disk usage in the background. You can browse the last saved index while updates resume.
+- **Compact paths.** Each directory path is stored once. Its children store a directory reference and a name. Existing indexes are migrated from saved metadata when the Mac is plugged in and enough temporary space is available. The saved index remains readable while the replacement is built.
 - **APFS measurements.** Logical size is the length of a file. **On Disk** shows its allocated size or the estimated size of a folder, accounting for hard links and whole-file APFS clones. **≈** marks an estimate and **≥** marks a measured minimum. Shared blocks and snapshots affect how much space a deletion frees.
 - **Local data.** SpaceTrail indexes the startup disk and stores the index and history in `~/Library/Application Support/SpaceTrail`. macOS permissions determine which protected folders it can access.
 

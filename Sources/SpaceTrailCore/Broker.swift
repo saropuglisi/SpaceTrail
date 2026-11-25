@@ -233,8 +233,8 @@ public final class StorageBroker {
         try scheduleRepairs()
         try index.db.transaction("BEGIN IMMEDIATE") {
             if try index.metadata("footprintSeeded") != "1" {
-                let ranking = try FolderRanking.load(from: index.db)
-                try index.footprints.prioritize(ranking.filter { access.includes($0.id) })
+                let ranking = try FolderRanking.load(from: index.db, schema: index.schema)
+                try index.footprints.prioritize(ranking.map(\.entry).filter { access.includes($0.id) })
                 try index.set("footprintSeeded", "1")
             }
         }
@@ -428,7 +428,7 @@ public final class StorageBroker {
         guard phase == .monitoring else { return }
         do {
             try index.reclaimSpace()
-            if try !index.compactParents && IndexMigration.isEligible(index.db, in: support) {
+            if try index.schema != .current && IndexMigration.isEligible(index.db, in: support) {
                 // Restart at a committed FSEvents cursor. The new process can replace
                 // the database without leaving an open SQLite writer behind.
                 exit(EXIT_SUCCESS)

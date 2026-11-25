@@ -25,13 +25,13 @@
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
-    <string>14</string>
+    <string>20</string>
     <key>NSDesktopFolderUsageDescription</key>
-    <string>SpaceTrail reads Desktop file metadata to find files and measure their sizes.</string>
+    <string>SpaceTrail uses access to Desktop to find files, measure their sizes, and show previews.</string>
     <key>NSDocumentsFolderUsageDescription</key>
-    <string>SpaceTrail reads Documents file metadata to find files and measure their sizes.</string>
+    <string>SpaceTrail uses access to Documents to find files, measure their sizes, and show previews.</string>
     <key>NSDownloadsFolderUsageDescription</key>
-    <string>SpaceTrail reads Downloads file metadata to find files and measure their sizes.</string>
+    <string>SpaceTrail uses access to Downloads to find files, measure their sizes, and show previews.</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSHighResolutionCapable</key>

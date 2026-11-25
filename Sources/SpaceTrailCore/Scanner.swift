@@ -166,7 +166,7 @@ final class FileScanner {
                     try index.queueInitial(child)
                 } else {
                     try index.finishInitialDirectory(child)
-                    try index.db.run("INSERT OR IGNORE INTO seen VALUES (?)", [.text(child.path)])
+                    try index.db.run("INSERT OR IGNORE INTO seen VALUES (?)", [.text(name)])
                     try index.insert(makeEntry(child, info: metadata, contents: Totals()))
                 }
                 countProgress()
@@ -189,9 +189,8 @@ final class FileScanner {
         while true {
             let missing = try index.missingChildren(key)
             guard !missing.isEmpty else { return }
-            for path in missing {
-                try index.db.run("DELETE FROM entries WHERE tree = ? AND path = ?",
-                                 EntryKey(tree: key.tree, path: path).values)
+            for name in missing {
+                try index.deleteEntry(EntryKey(tree: key.tree, path: childPath(key.path, name)))
             }
         }
     }
@@ -307,7 +306,7 @@ final class FileScanner {
         do {
             let complete = try withChildren(of: key.path, info: info) { name in
                 let child = EntryKey(tree: key.tree, path: childPath(key.path, name))
-                try index.db.run("INSERT OR IGNORE INTO seen VALUES (?)", [.text(child.path)])
+                try index.db.run("INSERT OR IGNORE INTO seen VALUES (?)", [.text(name)])
                 if try !excludes(child) {
                     try refreshNode(child, recursive: recursive, refreshAllocation: verifyAllocation)
                 }
@@ -328,10 +327,10 @@ final class FileScanner {
         while true {
             let missing = try index.missingChildren(key)
             guard !missing.isEmpty else { break }
-            for path in missing {
-                let child = EntryKey(tree: key.tree, path: path)
+            for name in missing {
+                let child = EntryKey(tree: key.tree, path: childPath(key.path, name))
                 try forget(child, previous: index.entry(child))
-                try index.db.run("INSERT OR IGNORE INTO seen VALUES (?)", [.text(path)])
+                try index.db.run("INSERT OR IGNORE INTO seen VALUES (?)", [.text(name)])
             }
             visited += missing.count
             if visited >= 4_096 {

@@ -24,17 +24,19 @@ final class IndexFileLock {
 }
 
 enum IndexMigration {
-    private static let lastAttempt = "indexMigrationAttempt"
+    private static let lastAttempt = "indexMigrationV2Attempt"
 
     static func removeInterruptedCopy(in support: URL) throws {
-        let staging = stagingDirectory(in: support)
-        if FileManager.default.fileExists(atPath: staging.path) {
-            try FileManager.default.removeItem(at: staging)
+        for staging in [stagingDirectory(in: support),
+                        support.appendingPathComponent(".index-migration-v1", isDirectory: true)] {
+            if FileManager.default.fileExists(atPath: staging.path) {
+                try FileManager.default.removeItem(at: staging)
+            }
         }
     }
 
     static func isEligible(_ db: SQLiteConnection, in support: URL) throws -> Bool {
-        guard try db.integer("PRAGMA user_version") == 0, allowsMaintenance,
+        guard try IndexSchema.read(from: db) != .current, allowsMaintenance,
               try db.integer("SELECT count(*) FROM sqlite_schema WHERE name = 'meta'") == 1,
               try db.text("SELECT value FROM meta WHERE key = 'baseline'") == "1" else { return false }
         let attempt = try db.text("SELECT value FROM meta WHERE key = ?", [.text(lastAttempt)]).flatMap(Double.init)
@@ -49,6 +51,11 @@ enum IndexMigration {
         let original = SpaceTrailPaths.database(in: support)
         guard FileManager.default.fileExists(atPath: original.path), try startAttempt(original, in: support) else { return }
         willCopy()
+        // Checkpoint the source before opening it read-only under ATTACH. A WAL
+        // database can have no sidecars after its last writer exits.
+        try withExtendedLifetime(IndexFileLock(support: support, mode: LOCK_EX)) {
+            try closeJournal(at: original)
+        }
 
         let staging = stagingDirectory(in: support)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false,
@@ -84,7 +91,7 @@ enum IndexMigration {
     }
 
     private static func buildCopy(of original: URL, in staging: URL) throws {
-        let writer = try IndexWriter(support: staging)
+        let writer = try IndexWriter(support: staging, deferIndexes: true)
         let db = writer.db
         guard var source = URLComponents(url: original, resolvingAgainstBaseURL: false) else {
             throw FilesystemFailure(path: original.path, code: EINVAL)
@@ -93,16 +100,30 @@ enum IndexMigration {
         guard let uri = source.url?.absoluteString else { throw FilesystemFailure(path: original.path, code: EINVAL) }
         try db.run("ATTACH DATABASE ? AS legacy", [.text(uri)])
         try db.run("PRAGMA synchronous = FULL")
+        let sourceVersion = try db.integer("PRAGMA legacy.user_version")
 
         // Copy the broker's history and cursors verbatim, including any unfinished repairs.
         try db.transaction("BEGIN IMMEDIATE") {
             for table in ["meta", "samples", "gaps", "limited_scopes", "pending_scan", "pending_repair"] {
                 try db.run("INSERT INTO main.\(table) SELECT * FROM legacy.\(table)")
             }
-            try db.run("DELETE FROM main.meta WHERE key IN (?, 'searchCursor')", [.text(lastAttempt)])
-            try db.run("INSERT OR REPLACE INTO main.meta VALUES ('searchComplete', '1')")
+            try db.run("DELETE FROM main.meta WHERE key IN (?, 'searchCursor', 'indexMigrationAttempt')", [.text(lastAttempt)])
+            if sourceVersion == IndexSchema.compactParents.rawValue {
+                try db.run("INSERT INTO main.parent_paths SELECT * FROM legacy.parent_paths")
+            } else {
+                try db.run("""
+                    INSERT OR IGNORE INTO main.parent_paths(tree, path)
+                    SELECT tree, parent FROM legacy.entries WHERE parent IS NOT NULL
+                    """)
+            }
+            try db.run("""
+                INSERT OR IGNORE INTO main.parent_paths(tree, path)
+                SELECT tree, path FROM legacy.entries WHERE kind = 1
+                UNION ALL SELECT tree, path FROM legacy.entries WHERE parent IS NULL AND kind <> 1
+                """)
         }
 
+        let parent = sourceVersion == IndexSchema.compactParents.rawValue ? "p.id = e.parent" : "p.tree = e.tree AND p.path = e.parent"
         var cursor: Int64 = 0
         var copied: Int64 = 0
         while let range = try nextBatch(db, after: cursor) {
@@ -111,16 +132,16 @@ enum IndexMigration {
             let bounds: [SQLValue] = [.int(cursor), .int(range.end)]
             try db.transaction("BEGIN IMMEDIATE") {
                 try db.run("""
-                    INSERT OR IGNORE INTO parent_paths(tree, path)
-                    SELECT tree, parent FROM legacy.entries
-                    WHERE rowid > ? AND rowid <= ? AND parent IS NOT NULL
-                    """, bounds)
-                try db.run("""
-                    INSERT INTO main.entries(rowid, \(entryColumns))
-                    SELECT e.rowid, e.tree, e.path, p.id, e.name, e.name_key, e.kind,
+                    INSERT INTO main.entries(rowid, tree, directory, \(entryMetadataColumns))
+                    SELECT e.rowid, e.tree, d.id, p.id, e.name, e.name_key, e.kind,
                            e.logical, e.allocated, e.files, e.modified, e.created, e.inode, e.mode, e.links
-                    FROM legacy.entries e LEFT JOIN parent_paths p ON p.tree = e.tree AND p.path = e.parent
-                    WHERE e.rowid > ? AND e.rowid <= ? AND (e.parent IS NULL OR p.id IS NOT NULL)
+                    FROM legacy.entries e
+                    LEFT JOIN main.parent_paths p ON \(parent)
+                    LEFT JOIN main.parent_paths d
+                        ON (e.kind = 1 OR e.parent IS NULL) AND d.tree = e.tree AND d.path = e.path
+                    WHERE e.rowid > ? AND e.rowid <= ?
+                        AND (e.parent IS NULL OR (p.tree = e.tree AND e.path = (\(IndexSchema.childPath))))
+                        AND ((e.parent IS NOT NULL AND e.kind <> 1) OR d.id IS NOT NULL)
                     """, bounds)
                 guard db.changes == range.count else { throw invalidCopy() }
             }
@@ -131,12 +152,22 @@ enum IndexMigration {
         // The staging copy preserves entry rowids, including those referenced by measurements.
         for table in FootprintIndex.tables {
             if try db.integer("SELECT count(*) FROM legacy.sqlite_schema WHERE name = ?", [.text(table)]) == 1 {
+                try writer.checkDiskSpace()
                 try db.run("INSERT INTO main.\(table) SELECT * FROM legacy.\(table)")
             }
         }
+        // Priority walks now visit siblings together. Restart only these cursors;
+        // the saved rowid cursor and all completed measurements still apply.
+        try db.run("UPDATE footprint_priority SET cursor = CASE WHEN path = '/' THEN '/' ELSE path || '/' END")
         try db.run("DETACH DATABASE legacy")
+        try writer.checkDiskSpace()
+        try writer.createIndexes()
+        try writer.createSearch()
+        try db.run("INSERT INTO name_fts(name_fts) VALUES ('rebuild')")
+        try db.run("INSERT INTO name_fts(name_fts) VALUES ('optimize')")
         guard try db.text("PRAGMA quick_check(1)") == "ok" else { throw invalidCopy() }
         try db.run("INSERT INTO name_fts(name_fts, rank) VALUES ('integrity-check', 1)")
+        try writer.set("searchComplete", "1")
         guard try db.text("PRAGMA journal_mode = DELETE") == "delete" else { throw invalidCopy() }
     }
 
@@ -164,6 +195,6 @@ enum IndexMigration {
     }
 
     private static func stagingDirectory(in support: URL) -> URL {
-        support.appendingPathComponent(".index-migration-v1", isDirectory: true)
+        support.appendingPathComponent(".index-migration-v2", isDirectory: true)
     }
 }

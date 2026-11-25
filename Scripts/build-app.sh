@@ -53,6 +53,8 @@ mkdir -p "$app/Contents/"{MacOS,Resources,Library/LaunchAgents} "$broker/Content
 install -m 755 "$binary_dir/SpaceTrail" "$app/Contents/MacOS/SpaceTrail"
 install -m 755 "$binary_dir/SpaceTrailBroker" "$broker/Contents/MacOS/SpaceTrailBroker"
 install -m 644 Packaging/App-Info.plist "$app/Contents/Info.plist"
+install -m 644 Packaging/ZIPFoundation-LICENSE.txt "$app/Contents/Resources/"
+/usr/bin/ditto "$binary_dir/ZIPFoundation_ZIPFoundation.bundle" "$app/Contents/Resources/ZIPFoundation_ZIPFoundation.bundle"
 install -m 644 Packaging/Broker-Info.plist "$broker/Contents/Info.plist"
 install -m 644 Packaging/io.spacetrail.broker.plist "$app/Contents/Library/LaunchAgents/"
 

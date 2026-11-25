@@ -3,6 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @Bindable var model: DashboardModel
     @State private var showingAccess = false
+    @State private var previewAccessError: String?
+    @State private var showingPreviewAccessError = false
 
     var body: some View {
         Form {
@@ -46,7 +48,7 @@ struct SettingsView: View {
             }
 
             Section("Disk Access") {
-                LabeledContent("Current Access") {
+                LabeledContent("Index Access") {
                     Text(model.indexAccess == .complete ? "Full Disk Access" :
                             (model.indexAccess == .limited ? "Limited Access" : "Setup Required"))
                 }
@@ -62,6 +64,25 @@ struct SettingsView: View {
                 }
             }
 
+            Section("Previews") {
+                Button("Choose Preview Folders…") {
+                    Task {
+                        if let error = await model.choosePreviewFolders() {
+                            previewAccessError = error
+                            showingPreviewAccessError = true
+                        }
+                    }
+                }
+                if !model.previewFolderNames.isEmpty {
+                    ForEach(model.previewFolderNames, id: \.self) { folder in
+                        Label(folder, systemImage: "folder.badge.checkmark")
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Button("Forget Preview Folders") { model.forgetPreviewFolders() }
+                }
+            }
+
             Section("Disk Usage") {
                 Text("SpaceTrail measures and updates folder sizes in the background, even after you close the app.")
                     .font(.callout)
@@ -74,6 +95,9 @@ struct SettingsView: View {
         .formStyle(.grouped)
         .frame(width: 510, height: 460)
         .onAppear { model.refreshService() }
+        .alert("Previews", isPresented: $showingPreviewAccessError, presenting: previewAccessError) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { message in Text(message) }
         .sheet(isPresented: $showingAccess) {
             VStack(spacing: 0) {
                 DiskAccessSetupView(model: model) { showingAccess = false }

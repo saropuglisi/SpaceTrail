@@ -119,8 +119,11 @@ public struct SearchFilters: Equatable, Sendable {
 
     public var kind: Kind = .all
     public var similar = true
+    public var format: FileFormat = .all
 
-    public init() {}
+    public init(format: FileFormat = .all) {
+        self.format = format
+    }
 }
 
 public struct EntryPage: Equatable, Sendable {

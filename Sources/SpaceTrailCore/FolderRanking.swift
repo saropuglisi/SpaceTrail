@@ -12,26 +12,30 @@ enum FolderRanking {
         "Containers", "Group Containers", "Logs", "Mobile Documents", "Preferences", "Saved Application State"
     ]
 
-    static func load(from db: SQLiteConnection, limit: Int = 8, preferFootprints: Bool = false) throws -> [StorageEntry] {
+    static func load(from db: SQLiteConnection, schema: IndexSchema, limit: Int = 8,
+                     preferFootprints: Bool = false) throws -> [IndexedEntry] {
         guard limit > 0 else { return [] }
         let root = VolumeTree.data.root
         let excluded = systemBranches.map { childPath(root, $0) }
-        let predicates = excluded.map { _ in "AND e.path <> ? AND (e.path < ? OR e.path >= ?)" }.joined(separator: " ")
+        let path = schema == .directoryReferences ? "d.path" : "e.path"
+        let directories = schema == .directoryReferences ? "CROSS JOIN parent_paths d ON d.id = e.directory" : ""
+        let predicates = excluded.map { _ in "AND \(path) <> ? AND (\(path) < ? OR \(path) >= ?)" }.joined(separator: " ")
         let bindings = excluded.flatMap { path -> [SQLValue] in
             [.text(path), .text(path + "/"), .text(path + "0")]
         }
-        var folders: [StorageEntry] = []
-        let columns = entryColumns.split(separator: " ").map { "e." + $0 }.joined(separator: " ")
+        var folders: [IndexedEntry] = []
         let eligible = "e.kind = 1 AND e.tree = 0 AND e.parent IS NOT NULL AND e.allocated > 0 \(predicates)"
         func append(from source: String, filter: String = "", order: String) throws {
             try db.queryWhile("""
-                SELECT \(columns) FROM \(source) WHERE \(eligible) \(filter) ORDER BY \(order)
+                SELECT \(schema.columns(path: path)) FROM \(source) \(directories)
+                WHERE \(eligible) \(filter) ORDER BY \(order)
                 """, bindings) { row in
-                let entry = indexEntry(row)
-                guard isSpecific(entry.id.path, in: root),
-                      !folders.contains(where: { isWithin(entry.id.path, $0.id.path) || isWithin($0.id.path, entry.id.path) })
+                let indexed = IndexedEntry(row)
+                let path = indexed.entry.id.path
+                guard isSpecific(path, in: root),
+                      !folders.contains(where: { isWithin(path, $0.entry.id.path) || isWithin($0.entry.id.path, path) })
                 else { return true }
-                folders.append(entry)
+                folders.append(indexed)
                 return folders.count < limit
             }
         }
@@ -42,7 +46,7 @@ enum FolderRanking {
                        order: "f.exclusive + f.shared DESC")
         }
         if folders.count < limit {
-            try append(from: "entries e INDEXED BY folder_allocated", order: "e.allocated DESC, e.path ASC")
+            try append(from: "entries e INDEXED BY folder_allocated", order: "e.allocated DESC, \(path) ASC")
         }
         return folders
     }

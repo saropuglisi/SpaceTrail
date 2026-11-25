@@ -38,20 +38,25 @@ final class FootprintIndex {
     }
 
     private let db: SQLiteConnection
+    private let schema: IndexSchema
 
-    init(db: SQLiteConnection) { self.db = db }
+    init(db: SQLiteConnection, schema: IndexSchema) {
+        self.db = db
+        self.schema = schema
+    }
 
     static func isAvailable(in db: SQLiteConnection) throws -> Bool {
         try db.integer("SELECT 1 FROM sqlite_schema WHERE name = 'folder_footprints'") == 1
     }
 
-    static func read(_ entry: StorageEntry, from db: SQLiteConnection) throws -> PhysicalFootprint? {
+    static func read(_ indexed: IndexedEntry, from db: SQLiteConnection) throws -> PhysicalFootprint? {
+        let entry = indexed.entry
+        let id: [SQLValue] = [.int(indexed.rowID)]
         if !entry.isFolder {
             var result: PhysicalFootprint?
             try db.query("""
-                SELECT f.exclusive, f.shared, f.incomplete
-                FROM entries e JOIN file_footprints f ON f.entry_id = e.rowid WHERE e.tree = ? AND e.path = ?
-                """, entry.id.values) {
+                SELECT exclusive, shared, incomplete FROM file_footprints WHERE entry_id = ?
+                """, id) {
                 result = PhysicalFootprint(exclusiveBytes: sqlInt($0, 0), sharedBytes: sqlInt($0, 1),
                                            scannedFiles: 1, incomplete: sqlInt($0, 2) != 0)
             }
@@ -62,9 +67,8 @@ final class FootprintIndex {
         var count: Int64 = 0
         var incomplete = false
         try db.query("""
-            SELECT f.exclusive, f.shared, f.measured, f.incomplete
-            FROM entries e JOIN folder_footprints f ON f.entry_id = e.rowid WHERE e.tree = ? AND e.path = ?
-            """, entry.id.values) {
+            SELECT exclusive, shared, measured, incomplete FROM folder_footprints WHERE entry_id = ?
+            """, id) {
             exclusive = sqlInt($0, 0)
             shared = sqlInt($0, 1)
             count = sqlInt($0, 2)
@@ -88,13 +92,10 @@ final class FootprintIndex {
                 entry_id INTEGER PRIMARY KEY, exclusive INTEGER NOT NULL, shared INTEGER NOT NULL,
                 identity TEXT, incomplete INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS footprint_identity ON file_footprints(identity) WHERE identity IS NOT NULL;
-            CREATE INDEX IF NOT EXISTS footprint_inode ON entries(tree, inode) WHERE kind = 0;
             CREATE TABLE IF NOT EXISTS folder_footprints (
                 entry_id INTEGER PRIMARY KEY, exclusive INTEGER NOT NULL, shared INTEGER NOT NULL,
                 measured INTEGER NOT NULL, incomplete INTEGER NOT NULL
             );
-            CREATE INDEX IF NOT EXISTS folder_footprint_size ON folder_footprints(exclusive + shared);
             CREATE TABLE IF NOT EXISTS folder_shares (
                 folder_id INTEGER NOT NULL, identity TEXT NOT NULL, bytes INTEGER NOT NULL, copies INTEGER NOT NULL,
                 PRIMARY KEY(folder_id, identity, bytes)
@@ -115,9 +116,18 @@ final class FootprintIndex {
             """)
     }
 
+    func createIndexes() throws {
+        try db.execute("""
+            CREATE INDEX IF NOT EXISTS footprint_identity ON file_footprints(identity) WHERE identity IS NOT NULL;
+            CREATE INDEX IF NOT EXISTS footprint_inode ON entries(tree, inode) WHERE kind = 0;
+            CREATE INDEX IF NOT EXISTS folder_footprint_size ON folder_footprints(exclusive + shared);
+            """)
+    }
+
     @discardableResult
     func update(_ key: EntryKey, footprint: FileFootprint, trackPeers: Bool) throws -> Bool {
-        let id = try db.integer("SELECT rowid FROM entries WHERE tree = ? AND path = ? AND kind <> 1", key.values)
+        let location = schema.location(key)
+        let id = try db.integer("SELECT e.rowid FROM entries e WHERE \(location.predicate) AND e.kind <> 1", location.values)
         guard id != 0 else { return false }
         return try apply([Change(rowID: id, key: key, footprint: footprint)], trackPeers: trackPeers)
     }
@@ -125,7 +135,7 @@ final class FootprintIndex {
     func prioritize(_ folders: [StorageEntry]) throws {
         for (turn, folder) in folders.enumerated() {
             try db.run("INSERT OR IGNORE INTO footprint_priority VALUES (?, ?, ?, ?)",
-                       folder.id.values + [.text(folder.id.path + "/"), .int(Int64(turn))])
+                       folder.id.values + [.text(childPath(folder.id.path, "")), .int(Int64(turn))])
         }
     }
 
@@ -143,11 +153,28 @@ final class FootprintIndex {
         if position == "complete", priority == nil { return (false, false) }
         let page: [Candidate]
         if let priority {
-            page = try candidates(
-                after: "e.tree = ? AND e.path > ? AND e.path < ? ORDER BY e.path",
-                values: [.int(priority.key.tree.rawValue), .text(priority.cursor), .text(priority.key.path + "0")],
-                limit: limit
-            )
+            if schema == .directoryReferences {
+                let directory = parentPath(priority.cursor) ?? priority.key.path
+                page = try candidates(
+                    from: "parent_paths p CROSS JOIN entries e ON e.parent = p.id",
+                    path: IndexSchema.childPath,
+                    after: """
+                        \(IndexSchema.directoryRange)
+                        AND e.name > CASE WHEN p.path = ? THEN ? ELSE '' END
+                        ORDER BY p.path, e.name
+                        """,
+                    values: priority.key.directoryRangeValues(startingAt: directory)
+                        + [.text(directory), .text(pathName(priority.cursor))],
+                    limit: limit
+                )
+            } else {
+                let upper = priority.key.path == "/" ? "0" : priority.key.path + "0"
+                page = try candidates(
+                    after: "e.tree = ? AND e.path > ? AND e.path < ? ORDER BY e.path",
+                    values: [.int(priority.key.tree.rawValue), .text(priority.cursor), .text(upper)],
+                    limit: limit
+                )
+            }
             if let last = page.last, page.count == limit {
                 // Small round-robin pages let several important folders become useful together.
                 let nextTurn = try db.integer("SELECT max(turn) FROM footprint_priority") + 1
@@ -168,11 +195,12 @@ final class FootprintIndex {
         return (true, try apply(changes))
     }
 
-    private func candidates(after scope: String, values: [SQLValue], limit: Int) throws -> [Candidate] {
+    private func candidates(from source: String = "entries e", path: String? = nil, after scope: String,
+                            values: [SQLValue], limit: Int) throws -> [Candidate] {
         var result: [Candidate] = []
         try db.query("""
-            SELECT e.rowid, e.tree, e.path, e.inode, e.kind <> 1 AND f.entry_id IS NULL
-            FROM entries e LEFT JOIN file_footprints f ON f.entry_id = e.rowid
+            SELECT e.rowid, e.tree, \(path ?? schema.path), e.inode, e.kind <> 1 AND f.entry_id IS NULL
+            FROM \(source) LEFT JOIN file_footprints f ON f.entry_id = e.rowid
             WHERE \(scope) LIMIT ?
             """, values + [.int(Int64(limit))]) {
             if let tree = VolumeTree(rawValue: sqlInt($0, 1)), let path = sqlText($0, 2) {
@@ -201,10 +229,10 @@ final class FootprintIndex {
             // A clone ID can match the source inode. Indexed family members cover
             // survivors of a deleted source and hard links in other directories.
             try db.query("""
-                SELECT e.rowid, e.path FROM entries e
+                SELECT e.rowid, \(schema.path) FROM entries e
                 WHERE e.kind = 0 AND e.tree = ? AND e.inode = ? AND e.rowid > ?
                 UNION
-                SELECT e.rowid, e.path FROM file_footprints f JOIN entries e ON e.rowid = f.entry_id
+                SELECT e.rowid, \(schema.path) FROM file_footprints f JOIN entries e ON e.rowid = f.entry_id
                 WHERE f.identity = ? AND f.entry_id > ? AND e.tree = ?
                 ORDER BY 1 LIMIT ?
                 """, [
@@ -294,7 +322,8 @@ final class FootprintIndex {
         let parentKey = EntryKey(tree: key.tree, path: parent)
         if let ids = cache[parentKey] { return ids }
         var ids = try ancestors(of: parentKey, cachedIn: &cache)
-        let id = try db.integer("SELECT rowid FROM entries WHERE tree = ? AND path = ? AND kind = 1", parentKey.values)
+        let location = schema.location(parentKey)
+        let id = try db.integer("SELECT e.rowid FROM entries e WHERE \(location.predicate) AND e.kind = 1", location.values)
         if id != 0 { ids.append(id) }
         cache[parentKey] = ids
         return ids

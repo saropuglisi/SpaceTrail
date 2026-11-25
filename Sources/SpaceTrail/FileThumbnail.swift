@@ -7,25 +7,12 @@ import SpaceTrailCore
 import SwiftUI
 import UniformTypeIdentifiers
 
-final class PreviewFolderGrant {
-    let url: URL
-    private let hasScope: Bool
-
-    init(url: URL) {
-        self.url = url
-        hasScope = url.startAccessingSecurityScopedResource()
-    }
-
-    deinit {
-        if hasScope { url.stopAccessingSecurityScopedResource() }
-    }
-}
-
 extension StorageEntry {
     var browserSymbol: String {
         switch kind {
         case .directory: return "folder.fill"
         case .file:
+            if isEPUB { return "book.closed" }
             guard let type = contentType else { return "doc" }
             if type.conforms(to: .image) { return "photo" }
             if type.conforms(to: .movie) { return "film" }
@@ -47,10 +34,12 @@ extension StorageEntry {
         return UTType(filenameExtension: suffix)
     }
 
+    var isEPUB: Bool { previewURL?.pathExtension.caseInsensitiveCompare("epub") == .orderedSame }
+
     var hasThumbnail: Bool {
         guard let url = previewURL else { return false }
         let suffix = url.pathExtension.lowercased()
-        if ["pdf", "doc", "docx", "odt", "pages", "ppt", "pptx", "key", "xls", "xlsx", "numbers"].contains(suffix) {
+        if ["epub", "pdf", "doc", "docx", "odt", "pages", "ppt", "pptx", "key", "xls", "xlsx", "numbers"].contains(suffix) {
             return true
         }
         guard let type = contentType else { return false }
@@ -113,6 +102,7 @@ struct FileThumbnail: View {
                             Image(systemName: "lock.fill")
                                 .font(.system(size: size == .row ? 8 : 12, weight: .semibold))
                                 .offset(x: 5, y: 3)
+                                .accessibilityHidden(true)
                         }
                     }
                     .accessibilityLabel("Preview protected by macOS")
@@ -138,6 +128,7 @@ struct FileThumbnail: View {
 final class ThumbnailResources {
     static let shared = ThumbnailResources()
     private let cache = NSCache<NSString, CGImage>()
+    private let imageDecoding = DispatchQueue(label: "io.spacetrail.preview.images", qos: .utility)
 
     private struct PendingRequest {
         let cancel: () -> Void
@@ -164,8 +155,11 @@ final class ThumbnailResources {
         "\(entry.id.path)\u{1f}\(entry.inode)-\(entry.modified.timeIntervalSince1970)-\(entry.logical)-\(size.points.width)-\(scale)"
     }
 
+    func clear() {
+        cache.removeAllObjects()
+    }
+
     func prepare(_ entries: [(StorageEntry, URL)], size: FileThumbnail.Size, scale: CGFloat) async -> [EntryKey: CGImage] {
-        let deadline = ContinuousClock.now + .milliseconds(2_200)
         let workers = min(entries.count, ProcessInfo.processInfo.isLowPowerModeEnabled ? 2 : 3)
         guard workers > 0 else { return [:] }
         return await withTaskGroup(of: (EntryKey, CGImage?).self) { group in
@@ -173,7 +167,7 @@ final class ThumbnailResources {
             func enqueue() {
                 guard let (entry, url) = queue.next() else { return }
                 group.addTask { [self] in
-                    (entry.id, await image(for: entry, at: url, size: size, scale: scale, deadline: deadline))
+                    (entry.id, await image(for: entry, at: url, size: size, scale: scale, deadline: .now + .seconds(2)))
                 }
             }
             for _ in 0..<workers { enqueue() }
@@ -184,7 +178,6 @@ final class ThumbnailResources {
                     group.cancelAll()
                     break
                 }
-                // Continue after the deadline only to pick up already cached items.
                 enqueue()
             }
             return images
@@ -217,6 +210,24 @@ final class ThumbnailResources {
     private func render(_ entry: StorageEntry, at url: URL, size: FileThumbnail.Size, scale: CGFloat,
                         deadline: ContinuousClock.Instant) async -> CGImage? {
         let pixels = CGSize(width: size.points.width * scale, height: size.points.height * scale)
+        let maxPixelSize = Int(max(pixels.width, pixels.height))
+        if entry.isEPUB {
+            return await decode(until: min(deadline, .now + .milliseconds(1_100))) { progress in
+                EPUBCover.thumbnail(at: url, maxPixelSize: maxPixelSize, progress: progress)
+            }
+        }
+        if let type = entry.contentType, type.conforms(to: .pdf) || type.conforms(to: .image) {
+            if let image = await decode(until: min(deadline, .now + .milliseconds(800)), work: { _ in
+                guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary)
+                else { return nil }
+                let page = type.conforms(to: .heic) ? CGImageSourceGetPrimaryImageIndex(source) : 0
+                return CGImageSourceCreateThumbnailAtIndex(source, page, [
+                    kCGImageSourceCreateThumbnailFromImageAlways: true,
+                    kCGImageSourceCreateThumbnailWithTransform: true,
+                    kCGImageSourceThumbnailMaxPixelSize: maxPixelSize
+                ] as CFDictionary)
+            }) { return image }
+        }
         // Restrict video decoding to local container formats with AVFoundation support.
         if ["mp4", "mov", "m4v", "3gp", "3g2", "mpeg", "mpg"].contains(url.pathExtension.lowercased()) {
             let generator = AVAssetImageGenerator(asset: AVURLAsset(url: url))
@@ -249,6 +260,20 @@ final class ThumbnailResources {
         return await generate(deadline: deadline) { complete in
             QLThumbnailGenerator.shared.generateBestRepresentation(for: request) { image, _ in complete(image?.cgImage) }
             return { QLThumbnailGenerator.shared.cancel(request) }
+        }
+    }
+
+    private func decode(until deadline: ContinuousClock.Instant, work: @escaping @Sendable (Progress) -> CGImage?) async -> CGImage? {
+        await generate(deadline: deadline) { complete in
+            let progress = Progress()
+            let item = DispatchWorkItem {
+                if !progress.isCancelled { complete(work(progress)) }
+            }
+            imageDecoding.async(execute: item)
+            return {
+                progress.cancel()
+                item.cancel()
+            }
         }
     }
 

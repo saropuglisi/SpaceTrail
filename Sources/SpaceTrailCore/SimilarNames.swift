@@ -17,7 +17,7 @@ struct SimilarNames {
         maximumEdits = letters.count >= 6 ? 2 : 1
     }
 
-    func candidates(in db: SQLiteConnection, where predicate: String, limit: Int) throws -> [Int64] {
+    func candidates(in db: SQLiteConnection, where predicate: String, bindings: [SQLValue] = [], limit: Int) throws -> [Int64] {
         guard limit > 0 else { return [] }
         let maximumLength = Int64(letters.count + maximumEdits + 18)
         let deadline = ContinuousClock.now + .milliseconds(400)
@@ -32,7 +32,7 @@ struct SimilarNames {
                     try db.query("""
                         SELECT e.rowid, e.name_key, e.kind FROM \(source)
                         WHERE \(matching) AND \(predicate) AND length(e.name_key) <= ? LIMIT 128
-                        """, values + [.int(maximumLength)]) { row in
+                        """, values + bindings + [.int(maximumLength)]) { row in
                         let id = sqlInt(row, 0)
                         guard visited.insert(id).inserted, let name = sqlText(row, 1),
                               let edits = score(name, isFolder: sqlInt(row, 2) == EntryKind.directory.rawValue)

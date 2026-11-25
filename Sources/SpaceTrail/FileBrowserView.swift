@@ -45,6 +45,24 @@ private extension EntrySort {
     }
 }
 
+private extension FileFormat {
+    static let presets: [Self] = [.all, .pdf, .epub, .images, .video, .audio, .documents, .archives]
+
+    var title: String {
+        switch self {
+        case .all: return "All Formats"
+        case .pdf: return "PDF"
+        case .epub: return "EPUB"
+        case .images: return "Images"
+        case .video: return "Video"
+        case .audio: return "Audio"
+        case .documents: return "Documents"
+        case .archives: return "Archives"
+        case .custom(let suffix): return "." + suffix
+        }
+    }
+}
+
 private struct SearchToolbarLayout: Layout {
     private let spacing: CGFloat = 8
 
@@ -92,6 +110,8 @@ struct FileBrowserView: View {
     @State private var previewURL: URL?
     @State private var previewAccessError: String?
     @State private var showsPreviewAccessError = false
+    @State private var customExtension = ""
+    @State private var showsExtensionPicker = false
     @State private var deletion: DeletionSelection?
     @State private var gridAnchor: EntryKey?
     @Environment(\.displayScale) private var displayScale
@@ -100,6 +120,7 @@ struct FileBrowserView: View {
 
     private var folders: Bool { model.activeSection == .folders }
     private var global: Bool { model.activeSection == .search }
+    private var format: FileFormat { global ? model.searchFilters.format : model.fileFormat }
     private var searchThumbnailSize: FileThumbnail.Size? {
         switch searchLayout {
         case .grid: return .cover
@@ -139,20 +160,24 @@ struct FileBrowserView: View {
         let job = Load(page: global ? request.withoutRevision : request, hasIndex: request.revision != nil,
                        thumbnails: global ? searchThumbnailSize : nil, scale: global ? thumbnailScale : 1,
                        access: global ? model.thumbnailAccess : nil)
+        let lockedFolders = previewFolders
         VStack(spacing: 0) {
             actions
                 .padding(.horizontal, StorageStyle.inset)
                 .padding(.bottom, 10)
-            if folders, model.canOfferPreviewAccess(in: model.folder), model.rows.contains(where: \.hasThumbnail) {
-                previewAccessNotice
+            if !lockedFolders.isEmpty {
+                previewAccessNotice(lockedFolders)
             }
             Divider()
             browserArea
         }
         .task(id: job) { await load(job) }
         .onChange(of: search.wrappedValue) { _, value in
-            if !global { model.resetPage() }
-            else if value.isEmpty, !model.submittedSearch.isEmpty { model.clearSearch() }
+            if folders { model.resetPage() }
+            else if value.isEmpty, !model.request.search.isEmpty {
+                if global { model.clearSearch() }
+                else { model.submitFileSearch() }
+            }
         }
         .onChange(of: sort.wrappedValue) { _, _ in model.resetPage() }
         .onChange(of: model.searchFilters) { _, _ in if global { model.applySearchFilters() } }
@@ -164,6 +189,16 @@ struct FileBrowserView: View {
         .alert("Previews", isPresented: $showsPreviewAccessError, presenting: previewAccessError) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in Text(message) }
+        .alert("File Extension", isPresented: $showsExtensionPicker) {
+            TextField("Extension", text: $customExtension)
+            Button("Apply") {
+                if let format = FileFormat(fileExtension: customExtension) { model.selectFormat(format) }
+            }
+            .disabled(FileFormat(fileExtension: customExtension) == nil)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Enter an extension such as .heic or .tar.gz.")
+        }
         .sheet(item: $deletion) { selection in
             ConfirmDeletionView(entries: selection.entries) {
                 deletion = nil
@@ -172,13 +207,35 @@ struct FileBrowserView: View {
         }
     }
 
-    private var previewAccessNotice: some View {
-        HStack(spacing: 9) {
-            Label("Previews Require Folder Access", systemImage: "lock")
+    private var previewFolders: [EntryKey] {
+        guard folders || layout.wrappedValue == .grid || (global && layout.wrappedValue == .list) else { return [] }
+        let locations = model.rows.compactMap { entry -> EntryKey? in
+            guard entry.hasThumbnail, let path = entry.parent else { return nil }
+            return model.previewAccessFolder(in: EntryKey(tree: entry.id.tree, path: path))
+        }
+        return Set(locations).sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
+    private func previewAccessNotice(_ folders: [EntryKey]) -> some View {
+        let names = folders.prefix(2).map(previewLocationName).joined(separator: ", ")
+        let locations = folders.count <= 2 ? names : "\(names) and \(folders.count - 2) more"
+        return HStack(spacing: 9) {
+            Label("Previews need access to \(locations)", systemImage: "lock")
                 .foregroundStyle(.secondary)
+                .lineLimit(1)
             Spacer(minLength: 8)
-            Button("Allow Previews…") { requestPreviews(in: model.folder) }
-                .help("Select this folder to show previews of its files")
+            if folders.count == 1 {
+                Button("Allow Previews…") { requestPreviews(in: folders.first) }
+            } else {
+                Menu("Allow Previews…") {
+                    ForEach(folders.prefix(6), id: \.self) { folder in
+                        Button("\(previewLocationName(folder))…") { requestPreviews(in: folder) }
+                            .help(StorageStyle.location(folder.path))
+                    }
+                    Divider()
+                    Button("Choose Folders…") { requestPreviews(in: nil) }
+                }
+            }
         }
         .font(.callout)
         .controlSize(.small)
@@ -186,9 +243,17 @@ struct FileBrowserView: View {
         .padding(.bottom, 10)
     }
 
-    private func requestPreviews(in folder: EntryKey) {
+    private func previewLocationName(_ folder: EntryKey) -> String {
+        if let scope = folder.protectedAppDataScope,
+           let container = folder.path.dropFirst(scope.path.count).split(separator: "/").first {
+            return String(container)
+        }
+        return (folder.path as NSString).lastPathComponent
+    }
+
+    private func requestPreviews(in folder: EntryKey?) {
         Task {
-            if let error = await model.choosePreviewFolder(folder) {
+            if let error = await model.choosePreviewFolders(startingIn: folder) {
                 previewAccessError = error
                 showsPreviewAccessError = true
             }
@@ -201,7 +266,7 @@ struct FileBrowserView: View {
             await model.load(job.page)
             return
         }
-        guard !job.page.search.isEmpty else { return }
+        guard job.page.hasQuery else { return }
         // Let a submitted page finish even if the broker commits another update.
         var lastRevision: String?
         while !Task.isCancelled, model.request.withoutRevision == job.page {
@@ -252,9 +317,9 @@ struct FileBrowserView: View {
             if model.revision == nil {
                 IndexPlaceholder(state: model.state, hasError: model.connectionError != nil || model.brokerProblem != nil)
                     .padding(16)
-            } else if global && model.submittedSearch.isEmpty {
+            } else if global && !model.request.hasQuery {
                 ContentUnavailableView("Search Disk", systemImage: "magnifyingglass",
-                                       description: Text("Enter a name or extension, then press Return."))
+                                       description: Text("Enter a name and press Return, or choose a file format."))
             } else if let error = model.browseError {
                 if global {
                     ContentUnavailableView {
@@ -493,8 +558,8 @@ struct FileBrowserView: View {
                 Button("Preview") { previewURL = url }
             } else if entry.hasThumbnail, let path = entry.parent {
                 let parent = EntryKey(tree: entry.id.tree, path: path)
-                if model.canOfferPreviewAccess(in: parent) {
-                    Button("Allow Previews in This Folder…") { requestPreviews(in: parent) }
+                if let folder = model.previewAccessFolder(in: parent) {
+                    Button("Allow Previews in Folder…") { requestPreviews(in: folder) }
                 }
             }
             Button("Details") {
@@ -525,20 +590,23 @@ struct FileBrowserView: View {
     }
 
     private var emptyState: some View {
-        ContentUnavailableView {
-            Label(search.wrappedValue.isEmpty ? "No Indexed Items" : "No Results",
-                  systemImage: search.wrappedValue.isEmpty ? "folder" : "magnifyingglass")
+        let hasSearch = model.request.hasQuery
+        return ContentUnavailableView {
+            Label(hasSearch ? "No Results" : "No Indexed Items",
+                  systemImage: hasSearch ? "magnifyingglass" : "folder")
         } description: {
-            if global { Text("No matches for “\(model.submittedSearch)”.") }
-            else if !search.wrappedValue.isEmpty { Text("Try a different name.") }
+            if global, !model.submittedSearch.isEmpty { Text("No matches for “\(model.submittedSearch)”.") }
+            else if format != .all, !folders { Text("Try another file format.") }
+            else if hasSearch { Text("Try a different name.") }
             else if folders, model.folderInfo == nil { Text("This folder may have been moved or deleted.") }
             else if folders { Text("The index has no accessible items in this folder.") }
         } actions: {
-            if global, !model.searchFilters.similar,
+            if global, !model.submittedSearch.isEmpty, !model.searchFilters.similar,
                model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) == model.submittedSearch {
                 Button("Include Similar Names") { model.searchFilters.similar = true }
             }
             else if !search.wrappedValue.isEmpty { Button("Clear Search") { search.wrappedValue = "" } }
+            else if !folders, format != .all { Button("Clear Format Filter") { model.selectFormat(.all) } }
             else if folders, model.folder.path != model.folder.tree.root, model.folderInfo == nil {
                 Button("Go Back") { model.upOneFolder() }
             }
@@ -583,26 +651,33 @@ struct FileBrowserView: View {
     private var searchInput: some View {
         HStack(spacing: 8) {
             searchField
-            Button("Search") { model.submitSearch() }
+            Button("Search", action: submitSearch)
                 .buttonStyle(.borderedProminent)
-                .disabled(model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(search.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
         }
+    }
+
+    private func submitSearch() {
+        if global { model.submitSearch() }
+        else if !folders { model.submitFileSearch() }
     }
 
     @ViewBuilder
     private var searchOptions: some View {
         Menu {
             Toggle("Include Similar Names", isOn: $model.searchFilters.similar)
-            Picker("Type", selection: $model.searchFilters.kind) {
+            Picker("Show", selection: $model.searchFilters.kind) {
                 Text("All").tag(SearchFilters.Kind.all)
                 Text("Files").tag(SearchFilters.Kind.files)
                 Text("Folders").tag(SearchFilters.Kind.folders)
             }
+            .disabled(format != .all)
         } label: {
             Label(filterLabel, systemImage: "line.3.horizontal.decrease")
         }
         .help("Include separate words and small typos. Turn off similar names to match the exact phrase.")
-        if !model.submittedSearch.isEmpty, layout.wrappedValue == .grid { sortMenu }
+        formatMenu
+        if model.request.hasQuery, layout.wrappedValue == .grid { sortMenu }
         viewPicker
     }
 
@@ -615,25 +690,59 @@ struct FileBrowserView: View {
     }
 
     private var browserActions: some View {
-        HStack(spacing: 8) {
+        Group {
             if folders {
-                Button { model.upOneFolder() } label: {
-                    Label("Parent Folder", systemImage: "chevron.up").labelStyle(.iconOnly)
+                HStack(spacing: 8) {
+                    Button { model.upOneFolder() } label: {
+                        Label("Parent Folder", systemImage: "chevron.up").labelStyle(.iconOnly)
+                    }
+                    .disabled(model.folder.path == model.folder.tree.root)
+                    .keyboardShortcut(.upArrow, modifiers: .command)
+                    .help("Parent Folder")
+                    breadcrumb
+                        .frame(maxWidth: 320, alignment: .leading)
+                    Spacer(minLength: 0)
+                    searchField
+                    if layout.wrappedValue == .grid { sortMenu }
+                    viewPicker
                 }
-                .disabled(model.folder.path == model.folder.tree.root)
-                .keyboardShortcut(.upArrow, modifiers: .command)
-                .help("Parent Folder")
-                breadcrumb
-                    .frame(maxWidth: 320, alignment: .leading)
-                Spacer(minLength: 0)
+            } else {
+                SearchToolbarLayout {
+                    searchInput
+                    HStack(spacing: 8) {
+                        formatMenu
+                        sortMenu
+                        viewPicker
+                    }
+                }
             }
-            searchField
-            if !folders { Spacer(minLength: 0) }
-            if layout.wrappedValue == .grid || (!folders && !global) { sortMenu }
-            viewPicker
         }
         .controlSize(.small)
         .font(.callout)
+    }
+
+    private var formatMenu: some View {
+        Menu {
+            ForEach(FileFormat.presets, id: \.self) { choice in
+                Button { model.selectFormat(choice) } label: {
+                    if choice == format { Label(choice.title, systemImage: "checkmark") }
+                    else { Text(choice.title) }
+                }
+            }
+            Divider()
+            Button("Other Extension…") {
+                if case .custom(let suffix) = format { customExtension = suffix }
+                else { customExtension = "" }
+                showsExtensionPicker = true
+            }
+        } label: {
+            Label(format == .all ? "Format" : format.title, systemImage: "doc.badge.gearshape")
+                .lineLimit(1)
+                .frame(maxWidth: 122)
+        }
+        .accessibilityLabel("File Format")
+        .accessibilityValue(format.title)
+        .help("Filter by file format")
     }
 
     private var viewPicker: some View {
@@ -654,7 +763,7 @@ struct FileBrowserView: View {
             TextField(global ? "Name or extension" : (folders ? "Search this folder" : "Search by name"), text: search)
                 .textFieldStyle(.plain)
                 .focused($searchFocused)
-                .onSubmit { if global { model.submitSearch() } }
+                .onSubmit(submitSearch)
                 .accessibilityLabel(global ? "Search files and folders" : (folders ? "Search this folder" : "Search files by name"))
             if !search.wrappedValue.isEmpty {
                 Button {

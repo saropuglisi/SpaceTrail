@@ -35,6 +35,8 @@ struct PageRequest: Equatable {
     let submission: Int
     var revision: String?
 
+    var hasQuery: Bool { !search.isEmpty || filters.format != .all }
+
     var withoutRevision: Self {
         var request = self
         request.revision = nil
@@ -44,7 +46,7 @@ struct PageRequest: Equatable {
 
 struct ThumbnailAccess: Equatable {
     let disk: DiskAccess?
-    let selectedFolders: Int
+    let folderRevision: Int
 }
 
 enum RemovalMethod: Sendable {
@@ -118,6 +120,9 @@ final class DashboardModel {
     private(set) var folder = EntryKey(tree: .data, path: VolumeTree.data.root)
     private(set) var mapFolder = EntryKey(tree: .data, path: VolumeTree.data.root)
     var fileSearch = ""
+    private var submittedFileSearch = ""
+    private var fileSearchSubmission = 0
+    private(set) var fileFormat: FileFormat = .all
     var globalSearch = ""
     var searchFilters = SearchFilters()
     private(set) var submittedSearch = ""
@@ -129,6 +134,8 @@ final class DashboardModel {
     private(set) var preparedThumbnailScale: CGFloat = 1
     private(set) var preparedThumbnailAccess: ThumbnailAccess?
     private var previewGrants: [EntryKey: PreviewFolderGrant] = [:]
+    private var previewFolderRevision = 0
+    var previewFolderNames: [String] { previewGrants.keys.map { StorageStyle.location($0.path) }.sorted() }
     var searchFocus = 0
     var globalOrder = [KeyPathComparator(\StorageEntry.name)]
     var folderSearch = ""
@@ -146,7 +153,7 @@ final class DashboardModel {
     var diskAccess = DiskAccess.read(in: SpaceTrailPaths.support)
     private(set) var foregroundAccess: DiskAccess?
     var thumbnailAccess: ThumbnailAccess {
-        ThumbnailAccess(disk: foregroundAccess, selectedFolders: previewGrants.count)
+        ThumbnailAccess(disk: foregroundAccess, folderRevision: previewFolderRevision)
     }
     var accessSetupError: String?
     var brokerProblem: String?
@@ -183,6 +190,10 @@ final class DashboardModel {
 
     init() {
         foregroundAccess = diskAccess?.effective
+        let bookmarks = UserDefaults.standard.array(forKey: PreviewFolderGrant.preferenceKey) as? [Data] ?? []
+        for bookmark in bookmarks {
+            if let grant = PreviewFolderGrant.restore(bookmark) { previewGrants[grant.key] = grant }
+        }
     }
 
     var isFixture: Bool { SpaceTrailPaths.fixtureRoot != nil }
@@ -219,10 +230,12 @@ final class DashboardModel {
         let scope: EntryScope
         let search: String
         let sort: KeyPathComparator<StorageEntry>?
+        let submission: Int
         switch activeSection {
-        case .folders: (scope, search, sort) = (.children(folder), folderSearch, folderOrder.first)
-        case .search: (scope, search, sort) = (.search, submittedSearch, globalOrder.first)
-        case .files, .map, .space: (scope, search, sort) = (.files, fileSearch, fileOrder.first)
+        case .folders: (scope, search, sort, submission) = (.children(folder), folderSearch, folderOrder.first, 0)
+        case .search: (scope, search, sort, submission) = (.search, submittedSearch, globalOrder.first, searchSubmission)
+        case .files, .map, .space:
+            (scope, search, sort, submission) = (.files, submittedFileSearch, fileOrder.first, fileSearchSubmission)
         }
         let field: EntrySort
         switch sort?.keyPath {
@@ -234,8 +247,8 @@ final class DashboardModel {
         return PageRequest(scope: scope, sort: field,
                            ascending: sort?.order == .forward, search: search,
                            page: page, limit: scope == .search ? Self.searchPageSize : Self.pageSize,
-                           filters: scope == .search ? submittedFilters : SearchFilters(),
-                           submission: scope == .search ? searchSubmission : 0, revision: revision)
+                           filters: scope == .search ? submittedFilters : SearchFilters(format: scope == .files ? fileFormat : .all),
+                           submission: submission, revision: revision)
     }
 
     var folderTitle: String {
@@ -336,8 +349,8 @@ final class DashboardModel {
     func load(_ request: PageRequest, thumbnailSize: FileThumbnail.Size? = nil, thumbnailScale: CGFloat = 1) async {
         guard request.revision != nil else { return }
         if request.scope == .search {
-            guard !request.search.isEmpty else { return }
-        } else if !request.search.isEmpty, request.search != lastRequest?.search {
+            guard request.hasQuery else { return }
+        } else if case .children = request.scope, !request.search.isEmpty, request.search != lastRequest?.search {
             try? await Task.sleep(for: .milliseconds(170))
         }
         guard !Task.isCancelled, isCurrent(request) else { return }
@@ -482,17 +495,32 @@ final class DashboardModel {
         resetPage(clear: true)
     }
 
+    func submitFileSearch() {
+        submittedFileSearch = fileSearch.trimmingCharacters(in: .whitespacesAndNewlines)
+        fileSearchSubmission += 1
+        resetPage(clear: true)
+    }
+
     func applySearchFilters() {
-        guard !submittedSearch.isEmpty, searchFilters != submittedFilters,
+        guard request.hasQuery, searchFilters != submittedFilters,
               globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) == submittedSearch else { return }
         submitSearch()
     }
 
+    func selectFormat(_ format: FileFormat) {
+        if activeSection == .search {
+            searchFilters.format = format
+            if format != .all, searchFilters.kind == .folders { searchFilters.kind = .files }
+            submitSearch()
+        } else if activeSection == .files {
+            fileFormat = format
+            submitFileSearch()
+        }
+    }
+
     func clearSearch() {
         globalSearch = ""
-        submittedSearch = ""
-        searchSubmission += 1
-        resetPage(clear: true)
+        submitSearch()
     }
 
     func showSearch() {
@@ -785,43 +813,76 @@ final class DashboardModel {
     }
 
     func previewURL(for entry: StorageEntry) -> URL? {
-        guard let indexedURL = entry.previewURL, entry.id.protectedAppDataScope == nil else { return nil }
-        if foregroundAccess?.includes(entry.id) == true { return indexedURL }
-        guard let parent = entry.parent, let grant = previewGrants[EntryKey(tree: entry.id.tree, path: parent)] else { return nil }
-        return grant.url.appendingPathComponent(indexedURL.lastPathComponent, isDirectory: false)
+        guard let indexedURL = entry.previewURL else { return nil }
+        if entry.id.protectedAppDataScope == nil, foregroundAccess?.includes(entry.id) == true { return indexedURL }
+        guard let parent = entry.parent,
+              let grant = previewGrant(for: EntryKey(tree: entry.id.tree, path: parent)) else { return nil }
+        return grant.source(for: entry.id)
     }
 
-    func canOfferPreviewAccess(in folder: EntryKey) -> Bool {
-        guard let home = SpaceTrailPaths.personalFolder, folder.tree == home.tree,
-              folder.path.hasPrefix(home.path + "/"), foregroundAccess?.includes(folder) == false,
-              previewGrants[folder] == nil else { return false }
-        let root = folder.path.dropFirst(home.path.count + 1).split(separator: "/").first
-        return root.map { ["Desktop", "Documents", "Downloads", "Pictures", "Movies", "Music"].contains($0) } == true
+    private func previewGrant(for folder: EntryKey) -> PreviewFolderGrant? {
+        previewGrants.values.first { $0.covers(folder) }
     }
 
-    func choosePreviewFolder(_ folder: EntryKey) async -> String? {
-        guard canOfferPreviewAccess(in: folder) else { return nil }
-        let expected = URL(fileURLWithPath: SpaceTrailPaths.displayPath(folder.path), isDirectory: true)
+    func previewAccessFolder(in folder: EntryKey) -> EntryKey? {
+        guard PreviewFolderGrant.allows(folder), previewGrant(for: folder) == nil,
+              folder.protectedAppDataScope != nil || foregroundAccess?.includes(folder) == false else { return nil }
+        return PreviewFolderGrant.suggestedFolder(for: folder)
+    }
+
+    func choosePreviewFolders(startingIn folder: EntryKey? = nil) async -> String? {
+        let requested = folder.map { URL(fileURLWithPath: SpaceTrailPaths.displayPath($0.path), isDirectory: true) }
+        if let folder, let requested, await PreviewFolderGrant.hasExistingAccess(to: folder, at: requested),
+           let grant = PreviewFolderGrant.selected(requested), grant.covers(folder) {
+            return savePreviewGrants([grant])
+        }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
         panel.resolvesAliases = false
         panel.canCreateDirectories = false
-        panel.directoryURL = expected
+        panel.directoryURL = requested ?? FileManager.default.homeDirectoryForCurrentUser
         panel.prompt = "Allow Previews"
-        panel.message = "Select “\(expected.lastPathComponent)” to preview the files inside."
+        if let folder {
+            let name = (folder.path as NSString).lastPathComponent
+            panel.message = "Select “\(name)” to preview files in this folder and its subfolders."
+        } else {
+            panel.message = "Choose personal folders to preview their files and subfolders."
+        }
         let response: NSApplication.ModalResponse
         if let window = NSApp.keyWindow {
             response = await panel.beginSheetModal(for: window)
         } else {
             response = await panel.begin()
         }
-        guard response == .OK, let url = panel.url else { return nil }
-        guard SpaceTrailPaths.displayPath(url.standardizedFileURL.path) == expected.standardizedFileURL.path else {
-            return "Select “\(expected.lastPathComponent)” to enable previews for that folder."
+        guard response == .OK else { return nil }
+        let grants = panel.urls.compactMap(PreviewFolderGrant.selected)
+        let saveError = savePreviewGrants(grants)
+        if grants.count != panel.urls.count {
+            return "Choose a specific folder in your home folder. This includes folders for individual apps."
         }
-        previewGrants[folder] = PreviewFolderGrant(url: url)
+        return saveError
+    }
+
+    private func savePreviewGrants(_ grants: [PreviewFolderGrant]) -> String? {
+        for grant in grants { previewGrants[grant.key] = grant }
+        if !grants.isEmpty {
+            previewFolderRevision += 1
+            UserDefaults.standard.set(previewGrants.values.compactMap(\.bookmark), forKey: PreviewFolderGrant.preferenceKey)
+        }
+        if grants.contains(where: { $0.bookmark == nil }) {
+            return "Some folders are available for this session. macOS couldn’t save their access for later."
+        }
         return nil
+    }
+
+    func forgetPreviewFolders() {
+        previewGrants.removeAll()
+        previewFolderRevision += 1
+        searchThumbnails.removeAll()
+        ThumbnailResources.shared.clear()
+        UserDefaults.standard.removeObject(forKey: PreviewFolderGrant.preferenceKey)
     }
 
     func diskUsage(for entry: StorageEntry, includeSavedMeasurement: Bool = false) -> DiskUsage {

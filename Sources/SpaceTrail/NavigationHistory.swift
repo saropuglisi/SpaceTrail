@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import SpaceTrailCore
 import SwiftUI
 
@@ -25,6 +26,26 @@ enum HistoryDirection: Int {
         case 3: self = .back
         case 4: self = .forward
         default: return nil
+        }
+    }
+
+    init?(event: NSEvent) {
+        if event.type == .otherMouseDown {
+            self.init(mouseButton: event.buttonNumber)
+            return
+        }
+        let modifiers = event.modifierFlags.intersection([.command, .option, .control, .shift])
+        guard event.type == .keyDown, modifiers == .command else { return nil }
+        switch event.charactersIgnoringModifiers {
+        case "[": self = .back
+        case "]": self = .forward
+        default:
+            // Mouse utilities may emit the ANSI key code even on a non-US keyboard.
+            switch Int(event.keyCode) {
+            case kVK_ANSI_LeftBracket: self = .back
+            case kVK_ANSI_RightBracket: self = .forward
+            default: return nil
+            }
         }
     }
 }
@@ -72,11 +93,11 @@ struct MouseHistoryTarget: NSViewRepresentable {
             if let monitor { NSEvent.removeMonitor(monitor) }
             monitor = nil
             guard window != nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [weak self] event in
-                guard let self, let window = self.window, event.window === window,
+            monitor = NSEvent.addLocalMonitorForEvents(matching: [.otherMouseDown, .keyDown]) { [weak self] event in
+                guard let self, let window = self.window, (event.window ?? NSApp.keyWindow) === window,
                       window.attachedSheet == nil, NSApp.modalWindow == nil,
-                      let direction = HistoryDirection(mouseButton: event.buttonNumber),
-                      self.navigate?(direction) == true else { return event }
+                      let direction = HistoryDirection(event: event) else { return event }
+                if event.type != .keyDown || !event.isARepeat { _ = self.navigate?(direction) }
                 return nil
             }
         }
