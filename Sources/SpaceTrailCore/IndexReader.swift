@@ -13,13 +13,15 @@ public struct IndexReader: Sendable {
         return try meta("revision", db: db)
     }
 
-    public func dashboard(since previous: String?, includeDetails: Bool, growthDays: Int = 7) throws -> (revision: String?, overview: Overview?) {
+    public func dashboard(since previous: String?, includeDetails: Bool, growthDays: Int = 7,
+                          includeHistory: Bool = false) throws -> (revision: String?, overview: Overview?) {
         guard let db = try database() else { return (nil, nil) }
         db.checkCancellation()
         return try db.transaction("BEGIN") {
             let revision = try meta("revision", db: db)
             guard let revision, revision != previous else { return (revision, nil) }
-            return (revision, try overview(in: db, includeDetails: includeDetails, growthDays: growthDays))
+            return (revision, try overview(in: db, includeDetails: includeDetails, growthDays: growthDays,
+                                           includeHistory: includeHistory))
         }
     }
 
@@ -258,7 +260,8 @@ public struct IndexReader: Sendable {
         return try db.transaction("BEGIN") { try overview(in: db, includeDetails: true) }
     }
 
-    private func overview(in db: SQLiteConnection, includeDetails: Bool, growthDays: Int = 7) throws -> Overview? {
+    private func overview(in db: SQLiteConnection, includeDetails: Bool, growthDays: Int = 7,
+                          includeHistory: Bool = false) throws -> Overview? {
         guard let timestamp = try meta("updated", db: db).flatMap(Double.init) else { return nil }
         let lastAudit = try meta("checked", db: db).flatMap(Double.init).map(Date.init(timeIntervalSince1970:))
         let visibility = try visibleRows(in: db)
@@ -274,7 +277,8 @@ public struct IndexReader: Sendable {
                 WHERE NOT EXISTS (SELECT 1 FROM gaps g WHERE g.tree = s.tree AND g.path = s.path)
             )
             """)
-        let order = includeDetails ? "date ASC" : "date DESC LIMIT 1"
+        let historyRequested = includeHistory || includeDetails
+        let order = historyRequested ? "date ASC" : "date DESC LIMIT 1"
         var samples: [StorageSample] = []
         try db.query("SELECT date, capacity, available, indexed FROM samples ORDER BY \(order)") { row in
             samples.append(StorageSample(date: Date(timeIntervalSince1970: sqlReal(row, 0)),
@@ -298,7 +302,7 @@ public struct IndexReader: Sendable {
         }
         return Overview(indexedFiles: count, indexedBytes: size, gaps: gaps,
                         lastUpdated: Date(timeIntervalSince1970: timestamp), lastAudit: lastAudit,
-                        sample: samples.last, history: includeDetails ? samples : [],
+                        sample: samples.last, history: historyRequested ? samples : [],
                         largeFiles: files, largeFolders: folders, recentGrowth: growth)
     }
 

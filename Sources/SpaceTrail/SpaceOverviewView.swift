@@ -6,35 +6,23 @@ struct SpaceOverviewView: View {
     @Bindable var model: DashboardModel
 
     var body: some View {
-        if let overview = model.overview, model.overviewIncludesDetails {
+        if model.overview != nil || model.volumeSpace != nil {
             GeometryReader { geometry in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 22) {
                         if let space = model.volumeSpace { capacity(space) }
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack {
-                                Text("Storage History").font(.headline).accessibilityAddTraits(.isHeader)
-                                Spacer()
-                                Picker("Range for Storage History and Recent File Growth", selection: $model.storageDays) {
-                                    Text("24 Hours").tag(1)
-                                    Text("7 Days").tag(7)
-                                    Text("30 Days").tag(30)
-                                    Text("90 Days").tag(90)
-                                }
-                                .pickerStyle(.segmented)
-                                .labelsHidden()
-                                .fixedSize()
-                                .controlSize(.small)
+                        if model.overview != nil {
+                            storageHistory
+                            recentGrowth(model.storageOverview?.recentGrowth)
+                            let layout = geometry.size.width >= 835
+                                ? AnyLayout(HStackLayout(alignment: .top, spacing: 26))
+                                : AnyLayout(VStackLayout(alignment: .leading, spacing: 22))
+                            layout {
+                                ranking("Largest Files", entries: model.storageOverview?.largeFiles, folders: false)
+                                ranking("Folders to Explore", entries: model.storageOverview?.largeFolders, folders: true)
                             }
-                            StorageHistoryView(history: overview.history, days: model.storageDays).equatable()
-                        }
-                        recentGrowth(overview.recentGrowth)
-                        let layout = geometry.size.width >= 835
-                            ? AnyLayout(HStackLayout(alignment: .top, spacing: 26))
-                            : AnyLayout(VStackLayout(alignment: .leading, spacing: 22))
-                        layout {
-                            ranking("Largest Files", entries: overview.largeFiles, folders: false)
-                            ranking("Folders to Explore", entries: overview.largeFolders, folders: true)
+                        } else {
+                            indexPlaceholder.frame(minHeight: 260)
                         }
                     }
                     .padding(.horizontal, StorageStyle.inset)
@@ -42,11 +30,37 @@ struct SpaceOverviewView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-        } else if model.overview != nil {
-            ProgressView().accessibilityLabel("Loading Storage Overview")
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            IndexPlaceholder(state: model.state, hasError: model.connectionError != nil || model.brokerProblem != nil)
+            indexPlaceholder
+        }
+    }
+
+    private var indexPlaceholder: some View {
+        IndexPlaceholder(state: model.state, hasError: model.connectionError != nil || model.brokerProblem != nil)
+    }
+
+    private var storageHistory: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("Storage History").font(.headline).accessibilityAddTraits(.isHeader)
+                Spacer()
+                Picker("Range for Storage History and Recent File Growth", selection: $model.storageDays) {
+                    Text("24 Hours").tag(1)
+                    Text("7 Days").tag(7)
+                    Text("30 Days").tag(30)
+                    Text("90 Days").tag(90)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .controlSize(.small)
+            }
+            if let history = model.storageHistory {
+                StorageHistoryView(history: history, days: model.storageDays).equatable()
+            } else {
+                ProgressView().controlSize(.small)
+                    .accessibilityLabel("Loading Storage History")
+            }
         }
     }
 
@@ -91,15 +105,16 @@ struct SpaceOverviewView: View {
         }
     }
 
-    private func recentGrowth(_ growth: RecentGrowth) -> some View {
+    private func recentGrowth(_ growth: RecentGrowth?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Recent File Growth")
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
-            if model.loadedGrowthDays != model.storageDays {
+            if model.loadedGrowthDays != model.storageDays || growth == nil {
                 ProgressView().controlSize(.small)
                     .accessibilityLabel("Loading Recent File Growth")
-            } else if let since = growth.since {
+            } else if let growth, let since = growth.since {
+                let files = growth.files.filter { !model.hidesRemovedEntry($0.entry) }
                 Text("By net increase in allocated size. Files may share disk space.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -108,13 +123,13 @@ struct SpaceOverviewView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if growth.files.isEmpty {
+                if files.isEmpty {
                     Text("No files with recorded growth in this period.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
                     VStack(spacing: 0) {
-                        ForEach(growth.files) { change in
+                        ForEach(files) { change in
                             Divider()
                             growthRow(change)
                         }
@@ -133,7 +148,7 @@ struct SpaceOverviewView: View {
         let entry = change.entry
         let size = StorageStyle.size(change.bytes)
         return Button {
-            model.reveal(entry.id)
+            model.reveal([entry])
         } label: {
             HStack(spacing: 9) {
                 Image(systemName: "doc")
@@ -175,7 +190,7 @@ struct SpaceOverviewView: View {
         .accessibilityHint("Shows the file in Finder")
     }
 
-    private func ranking(_ title: String, entries: [StorageEntry], folders: Bool) -> some View {
+    private func ranking(_ title: String, entries: [StorageEntry]?, folders: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
             Text(title).font(.headline).accessibilityAddTraits(.isHeader)
                 .padding(.bottom, 8)
@@ -183,14 +198,18 @@ struct SpaceOverviewView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 8)
-            if entries.isEmpty {
+            let visible = entries?.filter { !model.hidesRemovedEntry($0) }
+            if visible == nil {
+                ProgressView().controlSize(.small)
+                    .accessibilityLabel("Loading \(title)")
+            } else if visible?.isEmpty == true {
                 Text("No indexed items.").font(.callout).foregroundStyle(.secondary)
             }
-            ForEach(entries) { entry in
+            ForEach(visible ?? []) { entry in
                 Divider()
                 Button {
                     if folders { model.openFolder(entry.id) }
-                    else { model.reveal(entry.id) }
+                    else { model.reveal([entry]) }
                 } label: {
                     HStack(spacing: 8) {
                         Image(systemName: folders ? "folder" : "doc")

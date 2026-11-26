@@ -43,6 +43,10 @@ def verify(broker, base):
     private_file = app_data / "com.example.test" / "document.txt"
     private_file.parent.mkdir(parents=True)
     private_file.write_text("Test data")
+    shared_library = root / "Users" / "Shared" / "Library"
+    shared = shared_library / "Application Support" / "shared-image.qcow2"
+    shared.parent.mkdir(parents=True)
+    shared.write_bytes(b"s" * 4096)
     signature = subprocess.run(["/usr/bin/codesign", "-dv", "--verbose=4", str(broker)],
                                capture_output=True, text=True).stderr
     local_build = "TeamIdentifier=not set" in signature
@@ -246,6 +250,28 @@ def verify(broker, base):
             OR e.allocated <> (SELECT coalesce(sum(c.allocated), 0) FROM entries c WHERE c.parent=e.directory)
             OR e.files <> (SELECT coalesce(sum(c.files), 0) FROM entries c WHERE c.parent=e.directory))
             """) == []
+
+        stop(process)
+        # Older limited indexes could leave Shared/Library untouched. Seed a
+        # stale name without a corresponding filesystem event.
+        (support / "access.json").write_text('"limited"')
+        stale = shared.with_name("stale-image.qcow2")
+        with sqlite3.connect(db) as connection:
+            connection.execute("INSERT INTO limited_scopes VALUES (0, ?)", (str(shared_library),))
+            connection.execute("UPDATE entries SET name = ?, name_key = ? WHERE name = ?",
+                               (stale.name, stale.name, shared.name))
+        assert row(stale) and not row(shared)
+        process = start()
+        wait(lambda: not row(stale) and row(shared) == [(0, 4096, 1)], "repair previously skipped Shared Library")
+        assert query("SELECT value FROM meta WHERE key = 'baselineAt'") == baseline
+
+        # Finder's Move to Trash is a rename to an excluded destination.
+        trash = root / ".Trashes" / shared.name
+        trash.parent.mkdir()
+        shared.rename(trash)
+        wait(lambda: not row(shared) and row(shared.parent) == [(1, 0, 0)], "move to Trash from Shared Library")
+        assert not row(trash)
+        assert query("SELECT count(*) FROM name_fts WHERE name_fts MATCH 'sha AND har AND red AND qco'") == [(0,)]
     finally:
         hidden.chmod(0o700)
         stop(process)
@@ -466,4 +492,4 @@ if __name__ == "__main__":
         verify(executable, Path(directory).resolve())
     with tempfile.TemporaryDirectory(prefix="spacetrail-resume-") as directory:
         verify_resume(executable, Path(directory).resolve())
-    print("Verified scanning, search, APFS clones, FSEvents, resumption, and SQLite migration.")
+    print("Verified scanning, search, APFS clones, Finder-style moves to Trash, FSEvents, resumption, and SQLite migration.")

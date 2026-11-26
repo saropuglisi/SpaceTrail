@@ -95,6 +95,11 @@ public final class StorageBroker {
             [weak self] _ in
             self?.worker.async { [weak self] in self?.maintenance(manual: true) }
         })
+        observers.append(center.addObserver(forName: SpaceTrailPaths.verifyPathsNotification, object: support.path, queue: nil) {
+            [weak self] notification in
+            guard let paths = notification.userInfo?["paths"] as? [String] else { return }
+            self?.worker.async { [weak self] in self?.verifyIndexedPaths(paths.prefix(150)) }
+        })
         observers.append(center.addObserver(forName: SpaceTrailPaths.accessNotification, object: support.path, queue: nil) {
             _ in exit(EXIT_SUCCESS)
         })
@@ -217,8 +222,8 @@ public final class StorageBroker {
                     try index.scheduleRepair(EntryKey(tree: .system, path: "/"))
                     try index.set("system", systemVersion)
                 }
+                try index.scheduleAccessibleScopes(for: access)
                 if access == .complete && (accessChanged || appDataEnabled) {
-                    try index.scheduleLimitedScopes()
                     for key in try index.gaps(limit: 1_024, dueBefore: .distantFuture) {
                         try index.scheduleRepair(key)
                     }
@@ -254,6 +259,20 @@ public final class StorageBroker {
         guard let events else { return }
         do { try apply(events.drain()) }
         catch { fail(error) }
+    }
+
+    private func verifyIndexedPaths(_ paths: ArraySlice<String>) {
+        guard scanner != nil else { return }
+        let root = VolumeTree.data.root
+        do {
+            var batch = EventBatch()
+            for path in paths where path != root && isWithin(path, root) {
+                guard !path.utf8.contains(0), (path as NSString).standardizingPath == path else { continue }
+                let key = EntryKey(tree: .data, path: path)
+                if access.includes(key), try index.entry(key) != nil { batch.paths[path] = [] }
+            }
+            try apply(batch)
+        } catch { fail(error) }
     }
 
     private func apply(_ batch: EventBatch) throws {

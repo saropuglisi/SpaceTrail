@@ -21,6 +21,12 @@ public enum DiskAccess: String, Codable, Sendable {
         excludedScope(for: key) == nil
     }
 
+    public func confirmsMissing(_ key: EntryKey) -> Bool {
+        guard isWithin(key.path, key.tree.root), includes(key) else { return false }
+        var info = stat()
+        return lstat(key.path, &info) != 0 && (errno == ENOENT || errno == ENOTDIR)
+    }
+
     public var effective: Self {
         guard self == .complete, SpaceTrailPaths.fixtureRoot == nil else { return self }
         // macOS has no Full Disk Access preflight API. These locations require Full
@@ -64,16 +70,17 @@ public enum DiskAccess: String, Codable, Sendable {
     // Do not enter locations likely to require macOS consent during a limited scan.
     func excludedScope(for key: EntryKey) -> EntryKey? {
         if !scansAppData, let scope = key.protectedAppDataScope { return scope }
-        guard self == .limited, SpaceTrailPaths.fixtureRoot == nil, key.tree == .data else { return nil }
-        let path = SpaceTrailPaths.displayPath(key.path)
+        let root = key.tree.root
+        guard self == .limited, key.tree == .data, isWithin(key.path, root) else { return nil }
+        let path = String(key.path.dropFirst(root.count))
         if let name = ["Volumes", ".Trashes", ".DocumentRevisions-V100", ".TemporaryItems"]
             .first(where: { isWithin(path, "/" + $0) }) {
-            return EntryKey(tree: .data, path: childPath(VolumeTree.data.root, name))
+            return EntryKey(tree: .data, path: childPath(root, name))
         }
         guard path.hasPrefix("/Users/") else { return nil }
         let parts = path.dropFirst("/Users/".count).split(separator: "/", maxSplits: 2)
-        guard parts.count >= 2, Self.protectedHomeFolders.contains(parts[1]) else { return nil }
-        return EntryKey(tree: .data, path: childPath(VolumeTree.data.root, "Users/\(parts[0])/\(parts[1])"))
+        guard parts.count >= 2, parts[0] != "Shared", Self.protectedHomeFolders.contains(parts[1]) else { return nil }
+        return EntryKey(tree: .data, path: childPath(root, "Users/\(parts[0])/\(parts[1])"))
     }
 }
 

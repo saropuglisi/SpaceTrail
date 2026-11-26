@@ -569,7 +569,7 @@ struct FileBrowserView: View {
             Button("Copy Path") { copyEntryPath(entry) }
         }
         if !entries.isEmpty {
-            Button("Show in Finder") { model.reveal(entries.map(\.id)) }
+            Button("Show in Finder") { model.reveal(entries) }
             if !entries.contains(where: { FileDeletion.isProtected($0.id) }) {
                 Divider()
                 Button("Move to Trash") { moveToTrash(entries) }
@@ -853,7 +853,7 @@ struct FileBrowserView: View {
                         .fixedSize()
                 }
                 Button {
-                    model.reveal(model.selectedEntries.map(\.id))
+                    model.reveal(entries)
                 } label: {
                     Label("Show in Finder", systemImage: "arrow.up.forward.app")
                 }

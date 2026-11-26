@@ -8,6 +8,7 @@ public enum SpaceTrailPaths {
     public static let accessNotification = Notification.Name("io.spacetrail.access-changed")
     static let backgroundTakeoverNotification = Notification.Name("io.spacetrail.background-takeover")
     public static let reviewNotification = Notification.Name("io.spacetrail.review-index")
+    public static let verifyPathsNotification = Notification.Name("io.spacetrail.verify-indexed-paths")
 
     public static var support: URL {
         if let path = ProcessInfo.processInfo.environment["SPACETRAIL_SUPPORT"], !path.isEmpty {

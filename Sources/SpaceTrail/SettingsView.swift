@@ -2,12 +2,17 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var model: DashboardModel
+    @Binding var showsMenuBarIcon: Bool
     @State private var showingAccess = false
     @State private var previewAccessError: String?
     @State private var showingPreviewAccessError = false
 
     var body: some View {
         Form {
+            Section("Menu Bar") {
+                Toggle("Show SpaceTrail in the menu bar", isOn: $showsMenuBarIcon)
+            }
+
             Section("Indexing") {
                 if !model.isFixture, model.diskAccess != nil {
                     Toggle("Keep the index updated in the background", isOn: Binding(

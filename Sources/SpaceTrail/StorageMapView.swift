@@ -410,7 +410,7 @@ struct StorageMapView: View {
             Button("Open in Finder") { model.openFolderInFinder(item.id) }
         } else {
             if let url = model.previewURL(for: item.entry) { Button("Preview") { preview = url } }
-            Button("Show in Finder") { model.reveal(item.id) }
+            Button("Show in Finder") { model.reveal([item.entry]) }
         }
         Button("Copy Path") { copyEntryPath(item.entry) }
         if FileDeletion.canMoveToTrash(item.entry, access: .complete) {

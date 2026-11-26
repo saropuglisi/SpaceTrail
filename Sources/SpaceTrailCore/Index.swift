@@ -390,9 +390,17 @@ final class IndexWriter {
         try db.run("INSERT OR IGNORE INTO limited_scopes VALUES (?, ?)", key.values)
     }
 
-    func scheduleLimitedScopes() throws {
-        try db.run("INSERT OR IGNORE INTO pending_repair SELECT tree, path, 0 FROM limited_scopes")
-        try db.run("DELETE FROM limited_scopes")
+    func scheduleAccessibleScopes(for access: DiskAccess) throws {
+        var accessible: [EntryKey] = []
+        try db.query("SELECT tree, path FROM limited_scopes") { row in
+            guard let tree = VolumeTree(rawValue: sqlInt(row, 0)), let path = sqlText(row, 1) else { return }
+            let key = EntryKey(tree: tree, path: path)
+            if access.includes(key) { accessible.append(key) }
+        }
+        for key in accessible {
+            try scheduleRepair(key)
+            try db.run("DELETE FROM limited_scopes WHERE tree = ? AND path = ?", key.values)
+        }
     }
 
     func migrateSystemAliases(scheduleSystemRepair: Bool) throws {

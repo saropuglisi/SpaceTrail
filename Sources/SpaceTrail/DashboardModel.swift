@@ -159,9 +159,11 @@ final class DashboardModel {
     var brokerProblem: String?
     var showsDetails = false
     var overview: Overview?
-    private(set) var overviewIncludesDetails = false
+    private(set) var storageHistory: [StorageSample]?
+    private(set) var storageOverview: Overview?
     var storageDays = 7
     private(set) var loadedGrowthDays: Int?
+    private var storageRevision: String?
     var revision: String?
     var connectionError: String?
     var browseError: String?
@@ -325,31 +327,46 @@ final class DashboardModel {
             return
         }
         do {
-            let includeDetails = activeSection == .space
+            let showsStorage = activeSection == .space
             let growthDays = storageDays
-            let sameOverview = overviewIncludesDetails == includeDetails
-                && (!includeDetails || loadedGrowthDays == growthDays)
-            let previous = sameOverview ? revision : nil
-            let reader = self.reader
-            let read = Task.detached(priority: .utility) {
-                try reader.dashboard(since: previous, includeDetails: includeDetails, growthDays: growthDays)
-            }
-            let result = try await withTaskCancellationHandler {
-                try await read.value
-            } onCancel: {
-                read.cancel()
-            }
-            guard !Task.isCancelled else { return }
+            let needsHistory = showsStorage && (storageHistory == nil || storageRevision != revision)
+            let result = try await readDashboard(since: needsHistory ? nil : revision, includeHistory: showsStorage)
             if let updated = result.overview {
                 overview = updated
-                overviewIncludesDetails = includeDetails
-                loadedGrowthDays = includeDetails ? growthDays : nil
+                if showsStorage, storageHistory != updated.history { storageHistory = updated.history }
                 if revision != result.revision { revision = result.revision }
             }
             if result.revision != nil || currentState != nil { connectionError = nil }
+
+            let savedStorageRevision = loadedGrowthDays == growthDays ? storageRevision : nil
+            if showsStorage, let newest = result.revision, newest != savedStorageRevision {
+                let detail = try await readDashboard(since: savedStorageRevision, includeDetails: true, days: growthDays)
+                if let updated = detail.overview {
+                    storageOverview = updated
+                    storageRevision = detail.revision
+                    loadedGrowthDays = growthDays
+                    if storageHistory != updated.history { storageHistory = updated.history }
+                }
+            }
         } catch {
             if !Task.isCancelled, currentState?.phase != .preparing { connectionError = error.localizedDescription }
         }
+    }
+
+    private func readDashboard(since previous: String?, includeDetails: Bool = false, days: Int = 7,
+                               includeHistory: Bool = false) async throws -> (revision: String?, overview: Overview?) {
+        let reader = self.reader
+        let read = Task.detached(priority: .utility) {
+            try reader.dashboard(since: previous, includeDetails: includeDetails, growthDays: days,
+                                 includeHistory: includeHistory)
+        }
+        let result = try await withTaskCancellationHandler {
+            try await read.value
+        } onCancel: {
+            read.cancel()
+        }
+        try Task.checkCancellation()
+        return result
     }
 
     func load(_ request: PageRequest, thumbnailSize: FileThumbnail.Size? = nil, thumbnailScale: CGFloat = 1) async {
@@ -583,20 +600,38 @@ final class DashboardModel {
 
     func activate(_ entry: StorageEntry) {
         if entry.isFolder { openFolder(entry.id) }
-        else { reveal(entry.id) }
+        else { reveal([entry]) }
     }
 
-    func reveal(_ key: EntryKey) {
-        reveal([key])
-    }
-
-    func reveal(_ keys: [EntryKey]) {
-        NSWorkspace.shared.activateFileViewerSelecting(keys.map { URL(fileURLWithPath: $0.path) })
+    func reveal(_ entries: [StorageEntry]) {
+        let access = foregroundAccess
+        Task {
+            let missing = await Task.detached(priority: .userInitiated) {
+                guard let access else { return [StorageEntry]() }
+                return entries.filter { access.confirmsMissing($0.id) }
+            }.value
+            if !missing.isEmpty {
+                hideRemoved(missing, inTrash: false)
+                let paths = missing.filter { $0.id.tree == .data }.map(\.id.path)
+                if !paths.isEmpty {
+                    DistributedNotificationCenter.default().postNotificationName(
+                        SpaceTrailPaths.verifyPathsNotification, object: reader.support.path,
+                        userInfo: ["paths": paths], deliverImmediately: true
+                    )
+                }
+                let message = missing.count == 1 ? "The item is no longer at its indexed location." :
+                    "Some items are no longer at their indexed locations."
+                AccessibilityNotification.Announcement(message).post()
+            }
+            let missingKeys = Set(missing.map(\.id))
+            let urls = entries.filter { !missingKeys.contains($0.id) }.map { URL(fileURLWithPath: $0.id.path) }
+            if !urls.isEmpty { NSWorkspace.shared.activateFileViewerSelecting(urls) }
+        }
     }
 
     func openFolderInFinder(_ key: EntryKey) {
         if !NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: SpaceTrailPaths.displayPath(key.path)) {
-            reveal(key)
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: key.path)])
         }
     }
 
@@ -642,13 +677,7 @@ final class DashboardModel {
             return (report, before)
         }.value
         var report = result.0
-        let missing = report.removed + report.missing
-        for entry in missing {
-            recentlyRemoved[entry.id] = RecentRemoval(inode: entry.inode, until: .now + .seconds(30),
-                                                     inTrash: method == .trash, isFolder: entry.isFolder)
-        }
-        rows.removeAll { hidesRemovedEntry($0) }
-        selection.formIntersection(rows.lazy.map(\.id))
+        hideRemoved(report.removed + report.missing, inTrash: method == .trash)
         if method == .permanent, !report.removed.isEmpty {
             let space = DeletionSpace(bytes: await measureFreedSpace(since: result.1))
             report.space = space
@@ -659,6 +688,17 @@ final class DashboardModel {
         deletionReport = report
         removalInProgress = nil
         if method == .trash { AccessibilityNotification.Announcement(report.summary).post() }
+    }
+
+    private func hideRemoved(_ entries: [StorageEntry], inTrash: Bool) {
+        guard !entries.isEmpty else { return }
+        let until = ContinuousClock.now + .seconds(30)
+        for entry in entries {
+            recentlyRemoved[entry.id] = RecentRemoval(inode: entry.inode, until: until,
+                                                     inTrash: inTrash, isFolder: entry.isFolder)
+        }
+        rows.removeAll { hidesRemovedEntry($0) }
+        selection.formIntersection(rows.lazy.map(\.id))
     }
 
     @discardableResult
