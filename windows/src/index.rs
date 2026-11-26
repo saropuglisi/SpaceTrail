@@ -1,6 +1,7 @@
 use crate::{display_path, now, platform::Capacity};
 use anyhow::{Context, Result, bail};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params, params_from_iter, types::Value};
+use serde::{Deserialize, Serialize, Serializer};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -200,10 +201,11 @@ pub(crate) fn revision(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Entry {
     pub id: i64,
     pub name: String,
+    #[serde(serialize_with = "serialize_path")]
     pub path: PathBuf,
     pub folder: bool,
     pub logical: i64,
@@ -214,7 +216,12 @@ pub struct Entry {
     pub growth: i64,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+fn serialize_path<S: Serializer>(path: &Path, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&display_path(path))
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
 pub enum Sort {
     Name,
     #[default]
@@ -238,6 +245,7 @@ impl Sort {
 pub struct Request {
     pub folder: Option<i64>,
     pub include_folders: bool,
+    pub hide_system: bool,
     pub query: String,
     pub extensions: Vec<String>,
     pub sort: Sort,
@@ -264,14 +272,14 @@ pub struct Status {
     pub pending: bool,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Sample {
     pub hour: i64,
     pub capacity: i64,
     pub free: i64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 pub struct Storage {
     pub history: Vec<Sample>,
     pub largest: Vec<Entry>,
@@ -332,7 +340,7 @@ impl Reader {
 
     fn read_page(&self, request: &Request, limit: usize) -> Result<(Vec<Entry>, bool)> {
         let mut from = "entries e";
-        let mut conditions = Vec::new();
+        let mut conditions = vec!["e.parent IS NOT NULL".to_owned()];
         let mut args: Vec<Value> = Vec::new();
         if let Some(folder) = request.folder {
             conditions.push("e.parent=?".to_owned());
@@ -379,6 +387,9 @@ impl Reader {
             conditions.push("e.directory IS NULL".to_owned());
             conditions.push(format!("({})", filters.join(" OR ")));
         }
+        if request.hide_system {
+            self.hide_system_fields(&mut conditions, &mut args)?;
+        }
         args.extend([(limit as i64 + 1).into(), (request.offset as i64).into()]);
         let predicate = conditions.join(" AND ");
         let order = request.sort.column();
@@ -422,7 +433,13 @@ impl Reader {
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let (mut largest, _) = self.read_page(&Request::default(), 8)?;
+        let (mut largest, _) = self.read_page(
+            &Request {
+                hide_system: true,
+                ..Default::default()
+            },
+            8,
+        )?;
         largest.truncate(8);
         let mut chosen: Vec<Entry> = Vec::new();
         let root: Option<String> = self
@@ -450,17 +467,21 @@ impl Reader {
                 }
             }
         }
-        let recent = self.db.prepare(
+        let mut conditions = vec!["e.parent IS NOT NULL".to_owned()];
+        let mut args = vec![since.into()];
+        self.hide_system_fields(&mut conditions, &mut args)?;
+        let predicate = conditions.join(" AND ");
+        let recent = self.db.prepare(&format!(
             "WITH changes AS MATERIALIZED (
                 SELECT entry,sum(bytes) AS delta FROM growth WHERE hour>=? GROUP BY entry HAVING sum(bytes)>0
              ), ranked AS MATERIALIZED (
                 SELECT e.*,c.delta FROM changes c CROSS JOIN entries e NOT INDEXED ON e.id=c.entry
-                ORDER BY c.delta DESC,e.id DESC LIMIT 8
+                WHERE {predicate} ORDER BY c.delta DESC,e.id DESC LIMIT 8
              )
              SELECT e.id,e.name,e.directory,e.logical,e.allocated,e.files,e.estimates,e.modified,
                     p.directory,e.delta FROM ranked e LEFT JOIN entries p ON p.id=e.parent
              ORDER BY e.delta DESC,e.id DESC",
-        )?.query_map([since], read_entry)?.collect::<rusqlite::Result<Vec<_>>>()?;
+        ))?.query_map(params_from_iter(args), read_entry)?.collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(Storage {
             history,
             largest,
@@ -468,6 +489,59 @@ impl Reader {
             recent,
         })
     }
+
+    fn hide_system_fields(
+        &self,
+        predicates: &mut Vec<String>,
+        args: &mut Vec<Value>,
+    ) -> Result<()> {
+        let root: Option<(i64, String)> = self.db.query_row(
+            "SELECT e.id,e.directory FROM state s JOIN entries e ON e.directory=s.root WHERE s.id=1",
+            [], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional()?;
+        let Some((id, path)) = root.filter(|(_, path)| is_drive_root(Path::new(path))) else {
+            return Ok(());
+        };
+        predicates.push(
+            "(e.parent<>? OR e.name_key NOT IN ('pagefile.sys','hiberfil.sys',
+            'swapfile.sys','dumpstack.log','dumpstack.log.tmp','memory.dmp'))"
+                .into(),
+        );
+        args.push(id.into());
+        let mut statement = self.db.prepare(
+            "SELECT id,directory FROM entries WHERE parent=? AND directory IS NOT NULL
+             AND name_key IN ('windows','system volume information','$recycle.bin','recovery','boot','efi')",
+        )?;
+        let roots = statement.query_map([id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        for root in roots {
+            let (id, directory) = root?;
+            predicates.push(
+                "e.id<>? AND e.parent<>? AND e.parent NOT IN (
+                SELECT id FROM entries WHERE directory>=? AND directory<?
+            )"
+                .into(),
+            );
+            // A backslash is followed by ']' in SQLite's binary text collation.
+            // This range reads only descendant folders from the directory index.
+            args.extend([
+                id.into(),
+                id.into(),
+                format!("{directory}\\").into(),
+                format!("{directory}]").into(),
+            ]);
+        }
+        Ok(())
+    }
+}
+
+fn is_drive_root(path: &Path) -> bool {
+    use std::path::{Component, Prefix};
+    matches!(path.components().next(),
+        Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))
+    ) && path.has_root()
+        && path.parent().is_none()
 }
 
 fn specific_folder(root: &Path, path: &Path) -> bool {
@@ -479,7 +553,9 @@ fn specific_folder(root: &Path, path: &Path) -> bool {
         .next()
         .map(|p| p.as_os_str().to_string_lossy().to_lowercase());
     match first.as_deref() {
-        Some("windows" | "system volume information" | "$recycle.bin" | "recovery") => false,
+        Some(
+            "windows" | "system volume information" | "$recycle.bin" | "recovery" | "boot" | "efi",
+        ) => false,
         Some("users") => parts.count() >= 2,
         Some("program files" | "program files (x86)" | "programdata") => parts.next().is_some(),
         Some(_) => true,
@@ -507,4 +583,61 @@ fn read_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
         modified: row.get(7)?,
         growth: row.get(9)?,
     })
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_desktop_rankings_skip_windows_files_but_keep_neighboring_folders() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        db.execute_batch(
+            r"
+            INSERT INTO state(id,root) VALUES(1,'C:\');
+            INSERT INTO entries(id,parent,name,name_key,directory,allocated) VALUES
+                (1,NULL,'C:\','c:\','C:\',0),
+                (2,1,'WINDOWS','windows','C:\WINDOWS',9000),
+                (3,2,'System32','system32','C:\WINDOWS\System32',9000),
+                (4,1,'Windows Work','windows work','C:\Windows Work',5500),
+                (5,3,'large-file.bin','large-file.bin',NULL,9000),
+                (6,1,'hiberfil.sys','hiberfil.sys',NULL,7500),
+                (7,4,'large-file.txt','large-file.txt',NULL,5500);
+        ",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO growth(entry,hour,bytes) VALUES(5,?1,9000),(7,?1,5500)",
+            [now()],
+        )
+        .unwrap();
+        let reader = Reader { db };
+        let request = Request {
+            query: "large-file".into(),
+            hide_system: true,
+            ..Default::default()
+        };
+        let filtered = reader.page(&request).unwrap();
+        assert_eq!(
+            filtered.rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![7]
+        );
+        let unfiltered = reader
+            .page(&Request {
+                hide_system: false,
+                ..request
+            })
+            .unwrap();
+        assert_eq!(unfiltered.rows.len(), 2);
+        let storage = reader.storage(7).unwrap();
+        assert_eq!(
+            storage.largest.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![7]
+        );
+        assert_eq!(
+            storage.recent.iter().map(|row| row.id).collect::<Vec<_>>(),
+            vec![7]
+        );
+    }
 }

@@ -1,20 +1,22 @@
 # SpaceTrail for Windows
 
-SpaceTrail keeps a local index of a drive or folder, so you can explore its files and storage without starting a new scan each time. The Windows edition is a native desktop app written in Rust with SQLite.
+SpaceTrail keeps a local index of a drive or folder, so you can explore its files and storage as soon as you open the app. The Windows edition uses a Rust broker, SQLite, and the Microsoft Edge WebView2 Runtime for the desktop window.
 
-## Run the preview
+## Install the preview
 
-Download the portable executable from the [Windows preview release](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.1.0).
+Download **SpaceTrail-Setup-x64.exe** for most Intel and AMD PCs or **SpaceTrail-Setup-arm64.exe** for Windows on Arm. [Windows preview release](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.2.0)
 
-Use `SpaceTrail-x64.exe` on an Intel or AMD PC, or `SpaceTrail-arm64.exe` on Windows on Arm. Keep the portable executable in a stable folder if you enable **Start with Windows**.
+Setup works on Windows 11 and installs SpaceTrail for your account. Open **SpaceTrail** from the Start menu and scan the Windows drive or choose a folder. If you tried the portable preview, setup picks up the index and moves any existing sign-in entry to the installed app.
 
-Open SpaceTrail on Windows 11 and choose **Index Windows Drive** or **Choose Folder…**. The first scan checkpoints by directory and publishes partial results in batches. Once you close the window, the broker continues from the notification area. Use its icon to reopen SpaceTrail or quit background updates.
+The first scan saves progress by folder. After you close the window, the broker continues from the notification area. Enable **Start background updates at sign-in** on the first-run screen or in **Settings**.
 
-- **Files and Search** offer sorting, name and extension filters, and previews from installed Windows thumbnail providers.
+- **Storage** opens with free space, usage history, recent file growth, and the largest files and folders.
+- **Files and Search** offer sorting, name and file type filters, Windows thumbnails, and a **Show system files** option.
 - **Folders and Map** show the space used by subfolders and let you open locations in Explorer.
-- **Storage** shows free space, historical samples, largest files and folders, and recent file growth.
 
-**On Disk** shows allocated bytes. A leading **≈** marks an estimate, shared allocation, or incomplete folder coverage. Use **Show in Explorer** to manage files. The preview runs under the current user account and skips directory junctions, the Recycle Bin, and its own index. SQLite and settings are stored in `%LOCALAPPDATA%\SpaceTrail`.
+**On disk** shows allocated bytes. A leading **≈** marks an estimate, shared allocation, or incomplete folder coverage. Use **Show in Explorer** to manage files. SpaceTrail runs under the current user account and skips directory junctions, the Recycle Bin, and its own index.
+
+Uninstall SpaceTrail from **Settings → Apps → Installed apps**. Scan data stays in `%LOCALAPPDATA%\SpaceTrail` for future installations. Remove that folder after uninstalling if you also want to clear the saved index.
 
 ## Build
 
@@ -34,6 +36,8 @@ rustup target add x86_64-pc-windows-gnullvm aarch64-pc-windows-gnullvm
 ```
 
 The executable includes SQLite and Windows resources. Builds are written to `dist/windows`.
+
+With NSIS installed on Windows, run `.\Scripts\package-windows.ps1` to create the setup executable. Setup includes Microsoft's WebView2 bootstrapper for systems that need the runtime. The [Windows build workflow](../.github/workflows/windows.yml) builds and checks each installer on its target architecture.
 
 ## Verify
 

@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+  <title>SpaceTrail</title>
+  <link rel="stylesheet" href="ui.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="shell">
+    <aside class="sidebar" aria-label="SpaceTrail">
+      <div class="brand"><img src="../assets/spacetrail.png" alt="" width="34" height="34"><span>SpaceTrail</span></div>
+      <nav id="navigation" aria-label="Views"></nav>
+      <div class="sidebar-bottom">
+        <div class="sidebar-drive" id="sidebar-drive" hidden></div>
+        <button class="nav-button" id="settings-button" type="button"></button>
+      </div>
+    </aside>
+    <main id="main" tabindex="-1">
+      <div id="message" class="message" role="status" hidden></div>
+      <div id="screen"></div>
+    </main>
+  </div>
+  <dialog id="settings" aria-labelledby="settings-title">
+    <div class="dialog-title"><h2 id="settings-title">Settings</h2><button type="button" class="square" id="close-settings" aria-label="Close settings"></button></div>
+    <section class="setting">
+      <h3>Scan location</h3>
+      <p id="settings-location" class="path"></p>
+      <p id="change-location-note">Picking a different location replaces the current index.</p>
+      <button type="button" id="change-location" class="button">Choose a folder…</button>
+    </section>
+    <section class="setting">
+      <label class="check"><input type="checkbox" id="startup-setting"> Start background updates at sign-in</label>
+      <p>SpaceTrail keeps the index up to date after you close the window.</p>
+    </section>
+  </dialog>
+  <dialog id="preview" aria-labelledby="preview-title">
+    <div class="dialog-title"><h2 id="preview-title">File preview</h2><button type="button" class="square" id="close-preview" aria-label="Close preview"></button></div>
+    <p id="preview-name" class="preview-name"></p>
+    <p id="preview-path" class="path"></p>
+    <div id="preview-stage" class="preview-stage" role="status"></div>
+    <button id="preview-reveal" class="button" type="button">Show in Explorer</button>
+  </dialog>
+  <script src="app.js"></script>
+</body>
+</html>

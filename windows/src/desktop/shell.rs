@@ -1,4 +1,4 @@
-use super::{show_error, text};
+use super::text;
 use anyhow::{Result, bail};
 use spacetrail::{broker, display_path, platform::wide};
 use std::{
@@ -23,40 +23,42 @@ pub fn spawn(background: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn ensure_broker(support: &Path) {
-    if !broker::running(support)
-        && let Err(error) = spawn(true)
-    {
-        show_error(&format!("Could not start background updates. {error}"));
+pub fn ensure_broker(support: &Path) -> Result<()> {
+    if !broker::running(support) {
+        spawn(true)?;
     }
+    Ok(())
 }
 
-pub fn folder_dialog(owner: HWND) -> Option<PathBuf> {
-    let title = text("Choose a drive or folder to index.");
-    let mut display = [0_u16; 260];
+pub fn folder_dialog(owner: HWND) -> Result<Option<PathBuf>> {
+    use windows::{
+        Win32::{
+            Foundation::{ERROR_CANCELLED, HWND as WindowHandle},
+            System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+            UI::Shell::{
+                FOS_FORCEFILESYSTEM, FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog,
+                IFileOpenDialog, SIGDN_FILESYSPATH,
+            },
+        },
+        core::PCWSTR,
+    };
     unsafe {
-        let options = BROWSEINFOW {
-            hwndOwner: owner,
-            pszDisplayName: display.as_mut_ptr(),
-            lpszTitle: title.as_ptr(),
-            ulFlags: BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE,
-            ..Default::default()
-        };
-        let selected = SHBrowseForFolderW(&options);
-        if selected.is_null() {
-            return None;
+        let dialog: IFileOpenDialog =
+            CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)?;
+        dialog.SetOptions(FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST)?;
+        let title = text("Choose a location to scan");
+        dialog.SetTitle(PCWSTR(title.as_ptr()))?;
+        if let Err(error) = dialog.Show(Some(WindowHandle(owner))) {
+            if error.code() == ERROR_CANCELLED.to_hresult() {
+                return Ok(None);
+            }
+            return Err(error.into());
         }
-        let mut buffer = vec![0_u16; 32_768];
-        let ok = SHGetPathFromIDListEx(selected, buffer.as_mut_ptr(), buffer.len() as u32, 0);
-        CoTaskMemFree(selected.cast());
-        (ok != 0).then(|| {
-            use std::os::windows::ffi::OsStringExt;
-            let end = buffer
-                .iter()
-                .position(|unit| *unit == 0)
-                .unwrap_or(buffer.len());
-            PathBuf::from(OsString::from_wide(&buffer[..end]))
-        })
+        let path = dialog.GetResult()?.GetDisplayName(SIGDN_FILESYSPATH)?;
+        use std::os::windows::ffi::OsStringExt;
+        let selected = PathBuf::from(OsString::from_wide(path.as_wide()));
+        CoTaskMemFree(path.0.cast());
+        Ok(Some(selected))
     }
 }
 
@@ -123,17 +125,17 @@ pub fn set_launch_at_login(enabled: bool) -> Result<()> {
     Ok(())
 }
 
-pub struct Thumbnail(pub usize);
+struct Thumbnail(pub windows_sys::Win32::Graphics::Gdi::HBITMAP);
 
 impl Drop for Thumbnail {
     fn drop(&mut self) {
         unsafe {
-            windows_sys::Win32::Graphics::Gdi::DeleteObject(self.0 as _);
+            windows_sys::Win32::Graphics::Gdi::DeleteObject(self.0);
         }
     }
 }
 
-pub unsafe fn thumbnail(path: &Path) -> Option<Thumbnail> {
+unsafe fn thumbnail(path: &Path) -> Option<Thumbnail> {
     use std::ffi::c_void;
     use windows_sys::{Win32::Graphics::Gdi::HBITMAP, core::GUID};
 
@@ -162,29 +164,83 @@ pub unsafe fn thumbnail(path: &Path) -> Option<Thumbnail> {
     }
     let vtable = &**(item as *const *const FactoryVtable);
     let mut result = null_mut();
-    let status = (vtable.image)(item, SIZE { cx: 168, cy: 192 }, THUMBNAIL_ONLY, &mut result);
+    let status = (vtable.image)(item, SIZE { cx: 320, cy: 300 }, THUMBNAIL_ONLY, &mut result);
     (vtable.release)(item);
-    (status >= 0 && !result.is_null()).then_some(Thumbnail(result as usize))
+    let image = (!result.is_null()).then_some(Thumbnail(result))?;
+    (status >= 0).then_some(image)
 }
 
-pub fn date(seconds: i64) -> String {
-    use windows_sys::Win32::System::Time::{FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime};
-    if seconds == 0 {
-        return String::new();
-    }
-    let ticks = (seconds + 11_644_473_600).saturating_mul(10_000_000) as u64;
-    let filetime = FILETIME {
-        dwLowDateTime: ticks as u32,
-        dwHighDateTime: (ticks >> 32) as u32,
-    };
-    let mut utc = SYSTEMTIME::default();
-    let mut local = SYSTEMTIME::default();
+pub fn preview(path: &Path) -> Option<String> {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use std::mem::size_of;
+    use windows_sys::Win32::Graphics::Gdi::*;
+
     unsafe {
-        if FileTimeToSystemTime(&filetime, &mut utc) == 0
-            || SystemTimeToTzSpecificLocalTime(null(), &utc, &mut local) == 0
-        {
-            return String::new();
+        let image = thumbnail(path)?;
+        let mut bitmap = BITMAP::default();
+        let copied = GetObjectW(
+            image.0,
+            size_of::<BITMAP>() as i32,
+            (&mut bitmap as *mut BITMAP).cast(),
+        );
+        let (width, height) = (bitmap.bmWidth, bitmap.bmHeight);
+        if copied == 0 || !(1..=1024).contains(&width) || !(1..=1024).contains(&height) {
+            return None;
         }
+        let mut info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let dc = GetDC(null_mut());
+        if dc.is_null() {
+            return None;
+        }
+        let mut pixels = vec![0_u8; (width * height * 4) as usize];
+        let copied = GetDIBits(
+            dc,
+            image.0,
+            0,
+            height as u32,
+            pixels.as_mut_ptr().cast(),
+            &mut info,
+            DIB_RGB_COLORS,
+        );
+        ReleaseDC(null_mut(), dc);
+        if copied != height {
+            return None;
+        }
+        // Shell providers may return RGB data with an unused alpha channel.
+        let has_alpha = pixels.chunks_exact(4).any(|pixel| pixel[3] > 0);
+        for pixel in pixels.chunks_exact_mut(4) {
+            pixel.swap(0, 2);
+            if !has_alpha {
+                pixel[3] = 255;
+            } else if (1..255).contains(&pixel[3]) {
+                let alpha = u16::from(pixel[3]);
+                for value in &mut pixel[..3] {
+                    *value = ((u16::from(*value) * 255) / alpha).min(255) as u8;
+                }
+            }
+        }
+        let mut encoded = Vec::new();
+        let mut encoder = png::Encoder::new(&mut encoded, width as u32, height as u32);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder
+            .write_header()
+            .ok()?
+            .write_image_data(&pixels)
+            .ok()?;
+        Some(format!(
+            "data:image/png;base64,{}",
+            STANDARD.encode(encoded)
+        ))
     }
-    format!("{:04}-{:02}-{:02}", local.wYear, local.wMonth, local.wDay)
 }

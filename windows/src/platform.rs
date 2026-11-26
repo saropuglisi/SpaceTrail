@@ -1,6 +1,6 @@
 use std::{fs::Metadata, path::Path};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Capacity {
     pub total: i64,
     pub free: i64,

@@ -1,6 +1,5 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 
-mod canvas;
 mod shell;
 mod tray;
 mod window;
@@ -18,6 +17,38 @@ pub fn start_window() -> Result<()> {
 
 pub fn start_broker() -> Result<()> {
     tray::run(support()?)
+}
+
+pub fn stop_desktop() -> Result<()> {
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    for class in ["SpaceTrail.Window", "SpaceTrail.Broker"] {
+        unsafe {
+            let handle = FindWindowW(text(class).as_ptr(), std::ptr::null());
+            if handle.is_null() {
+                continue;
+            }
+            let mut pid = 0;
+            GetWindowThreadProcessId(handle, &mut pid);
+            let process = OpenProcess(PROCESS_SYNCHRONIZE, 0, pid);
+            if process.is_null() {
+                anyhow::ensure!(
+                    IsWindow(handle) == 0,
+                    "Close SpaceTrail before running setup."
+                );
+                continue;
+            }
+            PostMessageW(handle, WM_CLOSE, 0, 0);
+            let result = WaitForSingleObject(process, 15_000);
+            CloseHandle(process);
+            anyhow::ensure!(
+                result == WAIT_OBJECT_0,
+                "Close SpaceTrail before running setup."
+            );
+        }
+    }
+    Ok(())
 }
 
 fn support() -> Result<PathBuf> {

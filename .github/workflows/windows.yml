@@ -1,0 +1,57 @@
+name: Windows installers
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['codex/windows-*']
+    paths:
+      - 'windows/**'
+      - 'Scripts/*windows*'
+      - '.github/workflows/windows.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    name: Build and verify Windows (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2025
+            target: x86_64-pc-windows-msvc
+          - arch: arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Verify index and watcher
+        shell: pwsh
+        run: |
+          rustup target add '${{ matrix.target }}'
+          cargo test --locked --manifest-path windows/Cargo.toml --target '${{ matrix.target }}'
+          if ($LASTEXITCODE -ne 0) { throw 'Index tests failed.' }
+      - name: Build the desktop app
+        shell: pwsh
+        run: ./Scripts/build-windows.ps1 -Architecture '${{ matrix.arch }}'
+      - name: Build the per-user installer
+        shell: pwsh
+        run: |
+          $Nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
+          if (-not (Test-Path -LiteralPath $Nsis)) {
+            choco install nsis --no-progress --yes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install NSIS.' }
+          }
+          ./Scripts/package-windows.ps1 -Architecture '${{ matrix.arch }}' -MakeNsis $Nsis
+      - name: Verify installation and desktop
+        shell: pwsh
+        run: ./Scripts/test-windows-package.ps1 -Architecture '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: SpaceTrail-Setup-${{ matrix.arch }}
+          path: dist/windows/SpaceTrail-Setup-${{ matrix.arch }}.exe
+          if-no-files-found: error

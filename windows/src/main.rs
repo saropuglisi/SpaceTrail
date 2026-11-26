@@ -43,6 +43,8 @@ fn run() -> Result<()> {
         #[cfg(windows)]
         Some("--broker") => desktop::start_broker(),
         #[cfg(windows)]
+        Some("--shutdown") => desktop::stop_desktop(),
+        #[cfg(windows)]
         None => desktop::start_window(),
         _ => {
             bail!("Use the Windows desktop build, or --scan-once and --list for local diagnostics.")

@@ -4,7 +4,7 @@
   <p><strong>See what takes up space on your Mac.</strong></p>
   <p>Browse files, folders, and storage history from an index that updates in the background.</p>
   <p><code>macOS 14+</code> · <code>Swift 6</code> · <code>SwiftUI</code> · <code>SQLite</code></p>
-  <p><a href="https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.1.0">Windows Preview</a> · <a href="#quick-start">Quick Start</a> · <a href="#features">Features</a> · <a href="#architecture">Architecture</a></p>
+  <p><a href="https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.2.0">Windows Setup</a> · <a href="#quick-start">Quick Start</a> · <a href="#features">Features</a> · <a href="#architecture">Architecture</a></p>
 </div>
 
 ## Features
@@ -38,7 +38,7 @@ The window also handles side buttons mapped to **⌘[** and **⌘]** by a mouse 
 
 ## Quick Start
 
-[Download the Windows preview](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.1.0) or see the [Windows documentation](windows/README.md).
+[Download SpaceTrail Setup for Windows](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.2.0) or see the [Windows documentation](windows/README.md).
 
 You’ll need **macOS 14 or later** and **Swift 6** from Xcode 16 or a compatible toolchain. Build and launch SpaceTrail from the repository root.
 
