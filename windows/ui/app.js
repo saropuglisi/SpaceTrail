@@ -882,10 +882,20 @@ window.SpaceTrail = {
         position = 0;
         showView(false, false);
         break;
-      case "status":
+      case "status": {
+        const topologyChanged = status.drives.map((drive) => drive.id).join(",")
+          !== data.drives.map((drive) => drive.id).join(",");
         status = data;
+        if (view.drive && !status.drives.some((drive) => drive.id === view.drive)) {
+          selectDrive(null);
+        } else if (view.history_drive && !status.drives.some((drive) => drive.id === view.history_drive)) {
+          updateView({history_drive: null}, true);
+        } else if (topologyChanged && view.pageOffsets.length > 1) {
+          resetPaging({});
+        }
         renderStatus();
         break;
+      }
       case "data":
         if (data.id === serial) {
           loaded = data;
