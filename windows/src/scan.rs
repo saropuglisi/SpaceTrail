@@ -23,7 +23,12 @@ struct Item {
     created: i64,
 }
 
-pub(crate) fn step(db: &mut Connection, support: &Path, stop: &AtomicBool) -> Result<bool> {
+pub(crate) fn step(
+    db: &mut Connection,
+    root: &Path,
+    support: &Path,
+    stop: &AtomicBool,
+) -> Result<bool> {
     let job: Option<(i64, PathBuf, bool)> = db
         .query_row(
             "SELECT e.id,e.directory,p.walk FROM pending p JOIN entries e ON e.id=p.directory
@@ -41,7 +46,7 @@ pub(crate) fn step(db: &mut Connection, support: &Path, stop: &AtomicBool) -> Re
     let Some((id, directory, walk)) = job else {
         return Ok(false);
     };
-    scan_directory(db, id, &directory, walk, support, stop)?;
+    scan_directory(db, id, &directory, walk, root, support, stop)?;
     Ok(true)
 }
 
@@ -50,6 +55,7 @@ fn scan_directory(
     id: i64,
     path: &Path,
     walk: bool,
+    root: &Path,
     support: &Path,
     stop: &AtomicBool,
 ) -> Result<()> {
@@ -62,7 +68,12 @@ fn scan_directory(
     });
     let children = match children {
         Ok(children) => children,
-        Err(error) => return unavailable(db, id, &error),
+        Err(error) => {
+            if !root.is_dir() {
+                return Ok(());
+            }
+            return unavailable(db, id, &error);
+        }
     };
 
     // The queue entry survives each commit. Restarting a partially scanned folder

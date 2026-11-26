@@ -82,6 +82,25 @@ pub fn reveal(path: &Path) -> Result<()> {
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "SpaceTrail";
 
+pub fn prefers_dark() -> bool {
+    let key = text(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
+    let value = text("AppsUseLightTheme");
+    let mut light = 1_u32;
+    let mut bytes = std::mem::size_of_val(&light) as u32;
+    let status = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            key.as_ptr(),
+            value.as_ptr(),
+            RRF_RT_REG_DWORD,
+            null_mut(),
+            (&mut light as *mut u32).cast(),
+            &mut bytes,
+        )
+    };
+    status == ERROR_SUCCESS && light == 0
+}
+
 pub fn launch_at_login() -> bool {
     let key = text(RUN_KEY);
     let name = text(RUN_VALUE);

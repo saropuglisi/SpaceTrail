@@ -311,7 +311,7 @@ impl Reader {
             .db
             .query_row(
                 "SELECT s.root,e.id,s.revision,e.files,s.processed,s.baseline,s.started,
-                    EXISTS(SELECT 1 FROM pending) OR s.recovery_cursor IS NOT NULL,
+                    EXISTS(SELECT 1 FROM pending WHERE due<=strftime('%s','now')) OR s.recovery_cursor IS NOT NULL,
                     (SELECT count(*) FROM entries WHERE blocked=1 AND directory IS NOT NULL)
              FROM state s JOIN entries e ON e.directory=s.root WHERE s.id=1",
                 [],
@@ -536,7 +536,7 @@ impl Reader {
     }
 }
 
-fn is_drive_root(path: &Path) -> bool {
+pub(crate) fn is_drive_root(path: &Path) -> bool {
     use std::path::{Component, Prefix};
     matches!(path.components().next(),
         Some(Component::Prefix(prefix)) if matches!(prefix.kind(), Prefix::Disk(_) | Prefix::VerbatimDisk(_))

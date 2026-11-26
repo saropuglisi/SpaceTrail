@@ -21,48 +21,49 @@ const icons = {
   activity: "M2 12h4l3-6 5 12 3-6h5",
 };
 const sections = {
-  storage: ["Storage", "See what’s taking up space and what grew recently."],
-  files: ["Files", "Find the files taking up the most space."],
-  folders: ["Folders", "Browse your drive and see how much each folder uses."],
-  search: ["Search", "Find files and folders by name or file type."],
-  map: ["Map", "Explore your storage by size. Open a block to see what’s inside."],
+  files: ["Files", "Browse all indexed files."],
+  folders: ["Folders", "Browse your disks and compare folder sizes."],
+  search: ["Search", "Find files and folders across the index."],
+  map: ["Map", "Explore the files and folders that take up the most space."],
+  storage: ["Storage", "See disk usage and which files are taking up more space."],
 };
+
 const formats = [
   ["", "Any file type"], ["pdf", "PDF"], ["image", "Images"], ["video", "Videos"],
   ["audio", "Audio"], ["document", "Documents"], ["ebook", "Books"],
   ["archive", "Archives"], ["installer", "Installers"],
 ];
 const phases = {
-  loading: "Connecting to SpaceTrail",
-  starting: "Starting the first scan",
-  scanning: "First scan in progress",
-  updating: "Updating the index",
-  current: "Index up to date",
-  paused: "Background updates paused",
+  starting: "Preparing",
+  scanning: "Scanning",
+  updating: "Updating",
+  current: "Indexed",
+  paused: "Paused",
+  unavailable: "Unavailable",
 };
+
 const labels = {name: "Name", disk: "On disk", logical: "File size", modified: "Modified"};
 const numbers = new Intl.NumberFormat("en");
 const date = new Intl.DateTimeFormat("en", {month: "short", day: "numeric", year: "numeric"});
 const chartDate = new Intl.DateTimeFormat("en", {month: "short", day: "numeric"});
+const chartTime = new Intl.DateTimeFormat("en", {hour: "numeric", minute: "2-digit"});
 const mapColors = ["#303c5b", "#3c4b77", "#4b5087", "#5c4b8f", "#6c4993", "#82509a"];
 
 const freshView = (section) => ({
   section, folder: null, query: "", format: "", hide_system: true, sort: "disk", ascending: false,
-  offset: 0, days: 7,
+  drive: null, history_drive: null, offsets: {}, pageOffsets: [{}], days: 7,
 });
-let view = freshView("storage");
+let view = freshView("files");
 let stack = [view];
 let position = 0;
 let serial = 0;
 let config = null;
 let loaded = null;
-let status = {phase: "loading", indexed: 0, processed: 0, blocked: 0, capacity: null};
+let status = {scope: "all_drives", drives: [], paused: false};
 let previewToken = 0;
 let previewEntry = null;
 let previewTrigger = null;
-let setupStartup = true;
 let lastHistoryShortcut = -Infinity;
-let largestGroup = "folders";
 
 function node(tag, classes, content) {
   const result = document.createElement(tag);
@@ -130,11 +131,12 @@ function loadView(keepContent = false) {
     loaded = null;
     renderResults();
   }
-  send("view", {...view, id: serial});
+  const {pageOffsets, ...request} = view;
+  send("view", {...request, id: serial});
 }
 
 function go(next, focusQuery = false) {
-  if (!config?.root) return;
+  if (!config) return;
   stack = stack.slice(0, position + 1);
   stack.push(next);
   if (stack.length > 75) stack.shift();
@@ -159,7 +161,7 @@ function historyShortcut(delta) {
 
 function showView(focusQuery = false, focusHeading = true) {
   loaded = null;
-  window.scrollTo(0, 0);
+  $("main").scrollTo(0, 0);
   renderScreen();
   loadView();
   if (focusQuery) $("query")?.focus();
@@ -174,16 +176,21 @@ function updateView(changes, keepContent = false) {
 
 function openEntry(entry, trigger) {
   if (entry.folder) {
-    go({...freshView(view.section === "map" ? "map" : "folders"), folder: entry.id});
+    go({...freshView(view.section === "map" ? "map" : "folders"), drive: entry.drive, folder: entry.id});
   } else {
     openPreview(entry, trigger);
   }
 }
 
+const entryKey = (entry) => entry.drive + ":" + entry.id;
+const isScanning = (drive) => drive.phase === "starting" || drive.phase === "scanning";
+const indexing = () => status.drives.some(isScanning);
+const isBrowsing = () => view.section === "folders" || view.section === "map";
+
 function renderNavigation() {
-  $("navigation").hidden = !config?.root;
+  $("navigation").hidden = !config;
   $("navigation").replaceChildren();
-  if (!config?.root) return;
+  if (!config) return;
   for (const [key, [label]] of Object.entries(sections)) {
     const control = button(label, key, () => {
       if (view.section !== key) go(freshView(key), key === "search");
@@ -195,8 +202,80 @@ function renderNavigation() {
   }
 }
 
-function indexing() {
-  return ["loading", "starting", "scanning"].includes(status.phase);
+function resetPaging(changes) {
+  updateView({...changes, offsets: {}, pageOffsets: [{}]});
+}
+
+function selectDrive(drive) {
+  resetPaging({drive, folder: null, history_drive: null});
+}
+
+function renderDrivePicker(select, drives, includeAll, value) {
+  const choices = includeAll ? [["", "All drives"]] : [];
+  for (const drive of drives) choices.push([drive.id, drive.label]);
+  const signature = JSON.stringify(choices);
+  if (select.dataset.choices !== signature) {
+    select.dataset.choices = signature;
+    select.replaceChildren();
+    for (const [id, name] of choices) {
+      const option = node("option", "", name);
+      option.value = id;
+      select.append(option);
+    }
+  }
+  select.value = value || choices[0]?.[0] || "";
+  select.hidden = status.scope === "folder" || drives.length < 2;
+}
+
+function scanBanner() {
+  const drives = status.drives;
+  if (indexing()) {
+    const banner = node("section", "scan-banner");
+    banner.setAttribute("aria-labelledby", "scan-title");
+    const accessible = drives.filter((drive) => drive.phase !== "unavailable");
+    const ready = accessible.filter((drive) => drive.ready).length;
+    const heading = node("div", "scan-heading");
+    const title = node("h2", "", "First Scan");
+    title.id = "scan-title";
+    const summary = status.scope === "folder"
+      ? "Indexing your selected folder"
+      : numbers.format(ready) + " of " + numbers.format(accessible.length) + " drives indexed";
+    heading.append(icon("activity"), title, node("span", "scan-summary", summary));
+    banner.append(heading, node("p", "scan-copy", "SpaceTrail is finding files in the background. You can browse results as they appear."));
+    if (accessible.length > 1) {
+      const progress = node("progress", "scan-progress");
+      progress.max = accessible.length;
+      progress.value = ready;
+      progress.setAttribute("aria-label", "Local drives indexed");
+      progress.setAttribute("aria-valuetext", summary);
+      banner.append(progress);
+    }
+    const locations = node("ul", "scan-drives");
+    for (const drive of drives) {
+      const row = node("li");
+      const phase = node("span", "scan-phase", phases[drive.phase]);
+      if (isScanning(drive)) phase.prepend(node("span", "spinner"));
+      row.append(pathLabel(drive.label), phase);
+      if (drive.phase !== "unavailable") {
+        row.append(node("span", "number count", numbers.format(isScanning(drive) ? drive.processed : drive.indexed)
+          + (isScanning(drive) ? " examined" : " files")));
+      }
+      locations.append(row);
+    }
+    banner.append(locations);
+    return banner;
+  }
+  const blocked = drives.reduce((sum, drive) => sum + drive.blocked, 0);
+  const pending = drives.some((drive) => drive.phase === "updating");
+  if (blocked || pending) {
+    const banner = node("p", "notice");
+    banner.append(icon("info"), node("strong", "", blocked ? "Limited Access" : "Updating Index"),
+      node("span", "", blocked
+        ? numbers.format(blocked) + (blocked === 1 ? " folder could not be read." : " folders could not be read.")
+        : "You can browse previously indexed files."));
+    return banner;
+  }
+  return null;
 }
 
 function empty(glyph, title, message) {
@@ -209,14 +288,16 @@ function empty(glyph, title, message) {
 
 function renderScreen() {
   renderNavigation();
+  const toolbar = $("history-actions");
+  const back = button("Go back", "left", () => changeHistory(-1), "square");
+  const forward = button("Go forward", "right", () => changeHistory(1), "square");
+  back.disabled = position === 0;
+  forward.disabled = position === stack.length - 1;
+  toolbar.replaceChildren(back, forward);
   const screen = $("screen");
   screen.replaceChildren();
   if (!config) {
     screen.append(empty("loading", "Opening SpaceTrail"));
-    return;
-  }
-  if (!config.root) {
-    renderSetup(screen);
     return;
   }
   const header = node("header", "page-header");
@@ -225,59 +306,39 @@ function renderScreen() {
   const pageTitle = node("h1", "", title);
   pageTitle.id = "page-title";
   pageTitle.tabIndex = -1;
-  heading.append(pageTitle, node("p", "", description));
-  const actions = node("div", "heading-actions");
-  const back = button("Go back", "left", () => changeHistory(-1), "square");
-  const forward = button("Go forward", "right", () => changeHistory(1), "square");
-  back.disabled = position === 0;
-  forward.disabled = position === stack.length - 1;
-  actions.append(back, forward);
-  header.append(heading, actions);
-  screen.append(header);
+  const subtitle = node("p", "", description);
+  subtitle.id = "page-subtitle";
+  heading.append(pageTitle, subtitle);
+  const picker = node("select");
+  picker.id = "drive-picker";
+  picker.setAttribute("aria-label", "Drive");
+  picker.addEventListener("change", () => selectDrive(picker.value || null));
+  header.append(heading, picker);
+  const scan = node("div");
+  scan.id = "scan-status";
+  screen.append(header, scan);
   if (view.section === "storage") renderOverview(screen);
   else renderBrowser(screen);
-}
-
-function renderSetup(screen) {
-  const setup = node("section", "setup");
-  const graphic = node("div", "hero-icon");
-  graphic.append(icon("storage"));
-  const choices = node("div", "setup-options");
-  for (const [drive, glyph, name, detail] of [
-    [true, "storage", "Scan Windows drive", config.drive || "Your main drive"],
-    [false, "folders", "Choose a folder", "Scan just one location, including another drive."],
-  ]) {
-    const control = node("button", drive ? "option default" : "option");
-    control.type = "button";
-    const copy = node("div");
-    copy.append(node("span", "name", name), node("span", "caption", detail));
-    control.append(icon(glyph), copy, icon("right"));
-    control.addEventListener("click", () => send("scan", {drive, startup: setupStartup}));
-    choices.append(control);
-  }
-  const check = node("label", "check");
-  const input = node("input");
-  input.type = "checkbox";
-  input.checked = setupStartup;
-  input.addEventListener("change", () => { setupStartup = input.checked; });
-  check.append(input, "Start background updates at sign-in");
-  setup.append(graphic, node("h1", "", "See what’s using your space"),
-    node("p", "", "Choose a location to scan. SpaceTrail saves the results on this PC and keeps them up to date in the background."),
-    choices, check);
-  screen.append(setup);
+  renderStatus();
 }
 
 function renderOverview(screen) {
-  const top = node("div", "overview-top");
-  const capacity = node("section", "capacity");
+  const overview = node("div", "overview");
+  const capacity = node("section", "volume-cards");
   capacity.id = "capacity";
+  capacity.setAttribute("aria-label", "Drive capacity");
   const history = node("section", "history");
   const head = node("div", "history-head");
+  const controls = node("div", "heading-actions");
+  const select = node("select");
+  select.id = "history-picker";
+  select.setAttribute("aria-label", "Drive history");
+  select.addEventListener("change", () => updateView({history_drive: select.value}, true));
   const ranges = node("div", "range");
   ranges.setAttribute("role", "group");
   ranges.setAttribute("aria-label", "Storage history and growth range");
-  for (const days of [7, 30, 90]) {
-    const item = button(days + " days", null, () => {
+  for (const days of [1, 7, 30, 90]) {
+    const item = button(days === 1 ? "24 Hours" : days + " Days", null, () => {
       if (view.days !== days) updateView({days}, true);
       ranges.querySelectorAll("button").forEach((value) => value.setAttribute("aria-pressed", String(value === item)));
     }, "");
@@ -286,42 +347,23 @@ function renderOverview(screen) {
   }
   const chart = node("div");
   chart.id = "chart";
-  head.append(node("h2", "", "Usage history"), ranges);
+  controls.append(select, ranges);
+  head.append(node("h2", "", "Storage History"), controls);
   history.append(head, chart);
-  top.append(capacity, history);
-  const monitor = node("div", "monitor");
-  monitor.id = "monitor";
   const rankings = node("div", "rankings");
-  const recent = node("section", "rank-section");
-  const recentHead = node("div", "section-head");
-  recentHead.append(node("h2", "", "Recent growth"));
-  const recentResults = node("div");
-  recentResults.id = "recent-ranking";
-  recent.append(recentHead, node("p", "rank-help", "Files that added the most space"), recentResults);
-  const largest = node("section", "rank-section");
-  const largestHead = node("div", "section-head");
-  const groups = node("div", "range");
-  groups.setAttribute("role", "group");
-  groups.setAttribute("aria-label", "Largest items by kind");
-  const types = [["folders", "Folders"], ["largest", "Files"]];
-  for (const [key, name] of types) {
-    const control = button(name, null, () => {
-      largestGroup = key;
-      groups.querySelectorAll("button").forEach((value) => value.setAttribute("aria-pressed", String(value === control)));
-      renderLargest();
-    }, "");
-    control.setAttribute("aria-pressed", String(largestGroup === key));
-    groups.append(control);
-  }
-  largestHead.append(node("h2", "", "Largest items"), groups);
-  const largestResults = node("div");
-  largestResults.id = "largest-ranking";
-  const browse = button("Browse folders", null, () => go(freshView(largestGroup === "folders" ? "folders" : "files")), "quiet-link");
-  browse.id = "browse-largest";
-  largest.append(largestHead, largestResults, browse);
-  rankings.append(recent, largest);
-  screen.append(top, monitor, rankings);
-  renderStatus();
+  const recent = rankingSection("Recent File Growth", "Files that added the most space", "recent");
+  rankings.append(rankingSection("Largest Files", "By disk usage", "largest"),
+    rankingSection("Folders to Explore", "One folder per branch", "folders"));
+  overview.append(capacity, history, recent, rankings);
+  screen.append(overview);
+}
+
+function rankingSection(title, subtitle, id) {
+  const section = node("section", "rank-section");
+  const results = node("div");
+  results.id = id + "-ranking";
+  section.append(node("h2", "", title), node("p", "rank-help", subtitle), results);
+  return section;
 }
 
 function meter(capacity) {
@@ -339,53 +381,62 @@ function meter(capacity) {
   return container;
 }
 
+function driveSummary(drive, sidebar = false) {
+  const area = node("div", sidebar ? "sidebar-volume" : "capacity");
+  const head = node("div", "capacity-heading");
+  const label = node("div", "drive-name");
+  label.append(icon("storage"), pathLabel(drive.label));
+  head.append(label);
+  const space = drive.capacity;
+  if (space && !sidebar) head.append(node("span", "muted number", formatBytes(space.total) + " total"));
+  area.append(head);
+  if (space) {
+    const detail = node("div", "capacity-info");
+    if (!sidebar) detail.append(node("span", "number", formatBytes(space.total - space.free) + " used"));
+    detail.append(node("span", "number", formatBytes(space.free) + " free"));
+    area.append(meter(space), detail);
+  } else {
+    area.append(node("p", "capacity-info", "Space unavailable"));
+  }
+  return area;
+}
+
+function shownDrives() {
+  return status.drives.filter((drive) => !view.drive || drive.id === view.drive);
+}
+
 function renderStatus() {
-  const capacity = status.capacity;
-  const root = config?.root;
+  if (!config) return;
+  const drives = status.drives;
   const sidebar = $("sidebar-drive");
-  sidebar.hidden = !(capacity && root);
-  if (!sidebar.hidden) {
-    const label = node("div", "drive-name");
-    label.append(icon("storage"), pathLabel(root, "path"));
-    sidebar.replaceChildren(label, meter(capacity), node("p", "muted number", formatBytes(capacity.free) + " free"));
+  sidebar.hidden = drives.length === 0;
+  const overviewReady = drives.some((drive) => drive.ready);
+  let activity = indexing() ? "Indexing" : "Background Updates";
+  if (status.paused) activity = "Updates Paused";
+  else if (!overviewReady && !indexing()) activity = "Waiting for Drives";
+  sidebar.replaceChildren(...drives.map((drive) => driveSummary(drive, true)), node("p", "sidebar-state", activity));
+
+  const picker = $("drive-picker");
+  if (picker) renderDrivePicker(picker, drives, !isBrowsing(), view.drive || loaded?.folder?.drive);
+  const history = $("history-picker");
+  if (history) renderDrivePicker(history, shownDrives(), false, view.history_drive);
+  if ($("capacity")) $("capacity").replaceChildren(...shownDrives().map((drive) => driveSummary(drive)));
+
+  const scan = $("scan-status");
+  if (scan) {
+    const banner = scanBanner();
+    scan.replaceChildren(...(banner ? [banner] : []));
   }
-  if ($("capacity") && root) {
-    const label = node("div", "drive-name");
-    const drive = root.match(/^[A-Z]:/i)?.[0];
-    const source = drive && config.drive.toUpperCase().startsWith(drive.toUpperCase())
-      ? "Windows drive (" + drive + ")" : (drive ? drive + " drive" : "Volume capacity");
-    label.append(icon("storage"), node("span", "", source));
-    if (capacity) {
-      const count = node("p", "free-number number");
-      count.append(node("strong", "", formatBytes(capacity.free)), node("span", "", "free"));
-      $("capacity").replaceChildren(label, count, meter(capacity),
-        node("p", "capacity-info", formatBytes(capacity.total - capacity.free) + " used of " + formatBytes(capacity.total)));
-    } else {
-      $("capacity").replaceChildren(label, node("p", "muted", status.phase === "starting" ? "Checking disk space…" : "Disk capacity unavailable"));
-    }
+  if ($("page-subtitle") && view.section === "files" && drives.length) {
+    const count = shownDrives().reduce((sum, drive) => sum + drive.indexed, 0);
+    $("page-subtitle").textContent = numbers.format(count) + " files indexed"
+      + (!view.drive && drives.length > 1 ? " across " + drives.length + " drives" : "");
   }
-  const monitor = $("monitor");
-  if (monitor) {
-    const phase = node("div", "monitor-state");
-    phase.dataset.phase = status.phase;
-    const indicator = icon(status.phase === "current" ? "check" : "activity");
-    indicator.classList.add("indicator");
-    phase.append(indicator, node("strong", "", phases[status.phase] || phases.loading));
-    const count = status.phase === "scanning" || status.phase === "starting"
-      ? numbers.format(status.processed) + " items examined"
-      : numbers.format(status.indexed) + " files indexed";
-    const detail = node("span", "monitor-count number", count + (status.blocked ? " · Limited folder access" : ""));
-    if (status.blocked) detail.title = numbers.format(status.blocked) + " folders could not be read";
-    monitor.replaceChildren(phase, detail);
+  if (status.paused || drives.some((drive) => drive.phase === "paused")) {
+    showMessage("Some background updates are paused. You can browse saved results.", true, "broker");
+  } else if ($("message").dataset.reason === "broker") {
+    clearMessage();
   }
-  if ($("browser-state")) {
-    $("browser-state").textContent = status.phase === "scanning" || status.phase === "starting"
-      ? phases[status.phase] + " · " + numbers.format(status.processed) + " items examined"
-      : "";
-    $("browser-state").hidden = !$("browser-state").textContent;
-  }
-  if (status.phase === "paused") showMessage("Background updates are paused. Saved results are still available.", true, "broker");
-  else if ($("message").dataset.reason === "broker") clearMessage();
 }
 
 function renderChart(history) {
@@ -403,26 +454,27 @@ function renderChart(history) {
   const high = max + pad;
   const start = history[0].hour;
   const end = history.at(-1).hour;
+  const labelDate = end - start < 86_400 ? chartTime : chartDate;
   const geometry = node("div", "chart");
   const ticks = node("div", "axis-y");
   ticks.setAttribute("aria-hidden", "true");
   ticks.append(node("span", "", formatBytes(high)), node("span", "", formatBytes(low)));
   const graphic = svg("svg", {viewBox: "0 0 600 83", preserveAspectRatio: "none", role: "img",
-    "aria-label": "Disk used from " + chartDate.format(start * 1000) + " to " + chartDate.format(end * 1000)
+    "aria-label": "Disk used from " + labelDate.format(start * 1000) + " to " + labelDate.format(end * 1000)
       + ", starting at " + formatBytes(used[0]) + " and ending at " + formatBytes(used.at(-1))});
   for (const y of [1, 41.5, 82]) {
-    graphic.append(svg("line", {x1: 0, y1: y, x2: 600, y2: y, stroke: "#3c4863", "vector-effect": "non-scaling-stroke"}));
+    graphic.append(svg("line", {x1: 0, y1: y, x2: 600, y2: y, stroke: "var(--line)", "vector-effect": "non-scaling-stroke"}));
   }
   const points = history.map((point, index) => {
     const x = (point.hour - start) / (end - start) * 600;
     const y = 78 - (used[index] - low) / (high - low) * 73;
     return x.toFixed(2) + "," + y.toFixed(2);
   }).join(" ");
-  graphic.append(svg("polygon", {points: "0,82 " + points + " 600,82", fill: "#343c63", opacity: ".75"}));
-  graphic.append(svg("polyline", {points, fill: "none", stroke: "#abb6ff", "stroke-width": 2, "vector-effect": "non-scaling-stroke"}));
+  graphic.append(svg("polygon", {points: "0,82 " + points + " 600,82", fill: "var(--storage-accent)", opacity: ".13"}));
+  graphic.append(svg("polyline", {points, fill: "none", stroke: "var(--storage-accent)", "stroke-width": 2, "vector-effect": "non-scaling-stroke"}));
   const times = node("div", "axis-x");
   times.setAttribute("aria-hidden", "true");
-  for (const time of [start, end]) times.append(node("span", "", chartDate.format(time * 1000)));
+  for (const time of [start, end]) times.append(node("span", "", labelDate.format(time * 1000)));
   geometry.append(ticks, graphic, times);
   container.replaceChildren(geometry);
 }
@@ -454,7 +506,7 @@ function rank(container, key, entries) {
   for (const entry of entries.slice(0, 5)) {
     const control = node("button", "rank-button");
     control.type = "button";
-    control.dataset.entry = entry.id;
+    control.dataset.entry = entryKey(entry);
     const growth = key === "recent" && entry.growth > 0;
     const size = growth ? (entry.estimated ? "≈ " : "") + "+" + formatBytes(entry.growth) : formatBytes(entry.allocated, entry.estimated);
     control.append(icon(entry.folder ? "folders" : "file"), entryName(entry, true),
@@ -467,10 +519,7 @@ function rank(container, key, entries) {
   replaceResults(container, list);
 }
 
-function renderLargest() {
-  rank($("largest-ranking"), largestGroup, loaded?.storage?.[largestGroup]);
-  $("browse-largest").querySelector("span").textContent = largestGroup === "folders" ? "Browse folders" : "Browse files";
-}
+
 
 function renderBrowser(screen) {
   if (view.section === "folders" || view.section === "map") {
@@ -501,7 +550,7 @@ function renderBrowser(screen) {
     format.addEventListener("change", () => submit());
     const search = node("button", "button primary", "Search");
     search.type = "submit";
-    const submit = () => updateView({query: query.value.trim(), format: format.value, offset: 0});
+    const submit = () => resetPaging({query: query.value.trim(), format: format.value});
     form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
     form.append(field, format, search);
     screen.append(form);
@@ -511,7 +560,7 @@ function renderBrowser(screen) {
       const checkbox = node("input");
       checkbox.type = "checkbox";
       checkbox.checked = !view.hide_system;
-      checkbox.addEventListener("change", () => updateView({hide_system: !checkbox.checked, offset: 0}));
+      checkbox.addEventListener("change", () => resetPaging({hide_system: !checkbox.checked}));
       system.append(checkbox, "Show system files");
       options.append(system);
       const queryInfo = node("span", "path");
@@ -520,31 +569,36 @@ function renderBrowser(screen) {
       screen.append(options);
     }
   }
-  const indexState = node("p", "muted rank-help");
-  indexState.id = "browser-state";
-  indexState.hidden = true;
   const results = node("div");
   results.id = "browser-results";
   results.setAttribute("aria-live", "polite");
-  screen.append(indexState, results);
-  renderStatus();
+  screen.append(results);
 }
 
 function renderFolderPath(folder) {
   const container = $("folder-path");
   if (!container) return;
-  const folderPath = folder?.path || config.root;
+  const drive = status.drives.find((drive) => drive.id === (folder?.drive || view.drive)) || status.drives[0];
+  const folderPath = folder?.path || drive?.path;
   const up = button("Go up one folder", "up", () => {
-    go({...freshView(view.section), folder: folder.parent});
+    go({...freshView(view.section), drive: folder.drive, folder: folder.parent});
   }, "square");
   up.disabled = folder?.parent == null;
-  if (folderPath !== config.root) {
-    const root = button("Scan location", "storage", () => go(freshView(view.section)));
-    container.replaceChildren(up, root, pathLabel(folderPath));
-  } else {
-    container.replaceChildren(up, icon("storage"), pathLabel(folderPath));
+  container.replaceChildren(up);
+  if (folderPath && folderPath !== drive?.path) {
+    const root = button(drive?.label || "Drive root", "storage", () => go({...freshView(view.section), drive: folder.drive}));
+    container.append(root, pathLabel(folderPath));
+  } else if (drive) {
+    container.append(icon("storage"), pathLabel(drive.label));
   }
-  if (folder?.id != null) container.append(button("Show in Explorer", "pin", () => send("reveal", {id: folder.id})));
+  if (folder) {
+    container.append(button("Show in Explorer", "pin", () => send("reveal", {drive: folder.drive, id: folder.id})));
+  }
+  if (folder && view.section === "folders") {
+    const title = folderPath === drive?.path ? drive.label : folderPath.split("\\").filter(Boolean).at(-1);
+    $("page-title").textContent = title || "Folders";
+    $("page-title").title = folderPath;
+  }
 }
 
 function replaceResults(container, next) {
@@ -556,17 +610,20 @@ function replaceResults(container, next) {
 }
 
 function renderResults() {
-  if (!config?.root) return;
+  if (!config) return;
   if (view.section === "storage") {
     renderChart(loaded?.storage?.history);
-    rank($("recent-ranking"), "recent", loaded?.storage?.recent);
-    renderLargest();
+    for (const kind of ["recent", "largest", "folders"]) {
+      rank($(kind + "-ranking"), kind, loaded?.storage?.[kind]);
+    }
     return;
   }
   const target = $("browser-results");
   if (!target) return;
   if ($("query-info")) $("query-info").textContent = view.query ? "Results for “" + view.query + "”" : "";
   renderFolderPath(loaded?.folder);
+  const drive = $("drive-picker");
+  renderDrivePicker(drive, status.drives, !isBrowsing(), view.drive || loaded?.folder?.drive);
   target.setAttribute("aria-busy", String(!loaded));
   if (view.section === "search" && !view.query && !view.format) {
     target.replaceChildren(empty("search", "Find a file or folder", "Enter a name or choose a file type to search."));
@@ -576,6 +633,14 @@ function renderResults() {
     target.replaceChildren(empty("loading", view.query ? "Searching the index" : "Loading indexed files"));
     return;
   }
+  if (!status.drives.length) {
+    target.replaceChildren(empty("storage", "No local drives found", "Connect or unlock a local drive to start scanning."));
+    return;
+  }
+  if (shownDrives().length && shownDrives().every((drive) => drive.phase === "unavailable")) {
+    target.replaceChildren(empty("storage", "Drive unavailable", "Unlock or reconnect the drive to continue."));
+    return;
+  }
   if (!loaded.items?.length) {
     const text = view.query || view.format ? "Try a different name or file type." : "Items appear here as they are indexed.";
     target.replaceChildren(empty(view.section === "map" ? "map" : "files",
@@ -583,10 +648,10 @@ function renderResults() {
     return;
   }
   if (view.section === "map") replaceResults(target, renderMap(loaded.items));
-  else replaceResults(target, renderTable(loaded.items, loaded.more));
+  else replaceResults(target, renderTable(loaded.items, loaded.next));
 }
 
-function renderTable(entries, more) {
+function renderTable(entries, nextOffsets) {
   const result = node("div", "results");
   const viewport = node("div", "table-scroll");
   const table = node("table");
@@ -598,7 +663,7 @@ function renderTable(entries, more) {
     const active = view.sort === field;
     if (active) cell.setAttribute("aria-sort", view.ascending ? "ascending" : "descending");
     cell.append(button(label + (active ? (view.ascending ? " ↑" : " ↓") : ""), null, () => {
-      updateView({sort: field, ascending: active ? !view.ascending : field === "name", offset: 0}, true);
+      resetPaging({sort: field, ascending: active ? !view.ascending : field === "name"});
     }, ""));
     headings.append(cell);
   }
@@ -609,7 +674,7 @@ function renderTable(entries, more) {
     const row = node("tr");
     const name = node("td");
     const control = node("button", "file-link");
-    control.dataset.entry = entry.id;
+    control.dataset.entry = entryKey(entry);
     control.type = "button";
     control.append(icon(entry.folder ? "folders" : "file"), entryName(entry, view.section !== "folders"));
     control.addEventListener("click", () => openEntry(entry, control));
@@ -624,12 +689,19 @@ function renderTable(entries, more) {
   viewport.append(table);
   const footer = node("div", "result-bar");
   const pagination = node("div");
-  const prev = button("Previous page", "left", () => updateView({offset: Math.max(0, view.offset - 150)}), "square");
-  const next = button("Next page", "right", () => updateView({offset: view.offset + 150}), "square");
-  prev.disabled = view.offset === 0;
-  next.disabled = !more;
+  const previousPages = view.pageOffsets;
+  const prev = button("Previous page", "left", () => {
+    const pages = previousPages.slice(0, -1);
+    updateView({offsets: pages.at(-1), pageOffsets: pages});
+  }, "square");
+  const next = button("Next page", "right", () => {
+    updateView({offsets: nextOffsets, pageOffsets: [...previousPages, nextOffsets]});
+  }, "square");
+  prev.disabled = previousPages.length === 1;
+  next.disabled = !nextOffsets;
   pagination.append(prev, next);
-  footer.append(node("span", "number", "Items " + numbers.format(view.offset + 1) + "–" + numbers.format(view.offset + entries.length)), pagination);
+  const start = (previousPages.length - 1) * 150;
+  footer.append(node("span", "number", "Items " + numbers.format(start + 1) + "–" + numbers.format(start + entries.length)), pagination);
   result.append(viewport, footer);
   return result;
 }
@@ -670,7 +742,7 @@ function renderMap(entries) {
     const entry = item.entry;
     const tile = node("button", "tile");
     tile.type = "button";
-    tile.dataset.entry = entry.id;
+    tile.dataset.entry = entryKey(entry);
     const label = node("span", "tile-name");
     label.append(icon(entry.folder ? "folders" : "file"), node("span", "", entry.name));
     const size = formatBytes(entry.allocated, entry.estimated);
@@ -703,7 +775,7 @@ function showMessage(message, retry, reason = "action") {
   box.append(retry ? button("Try again", null, () => {
     clearMessage();
     send("retry");
-    if (config?.root) loadView(true);
+    if (config) loadView(true);
   }) : button("Dismiss message", "close", clearMessage, "square"));
   box.hidden = false;
 }
@@ -723,7 +795,7 @@ function openPreview(entry, trigger) {
   $("preview").showModal();
   $("close-preview").focus();
   previewToken += 1;
-  send("preview", {id: entry.id, token: previewToken});
+  send("preview", {drive: entry.drive, id: entry.id, token: previewToken});
 }
 
 function bindDialog(dialog, close) {
@@ -734,26 +806,38 @@ function bindDialog(dialog, close) {
 bindDialog("settings", "close-settings");
 bindDialog("preview", "close-preview");
 const settingsButton = $("settings-button");
-settingsButton.append(icon("settings"), node("span", "", "Settings"));
-settingsButton.setAttribute("aria-label", "Settings");
-settingsButton.title = "Settings";
+settingsButton.append(icon("settings"));
+const searchButton = $("search-button");
+searchButton.append(icon("search"));
+searchButton.addEventListener("click", () => {
+  if (view.section === "search") $("query")?.focus();
+  else go(freshView("search"), true);
+});
+
+function updateSettings() {
+  const location = $("settings-location");
+  location.textContent = status.scope === "folder" ? status.drives[0]?.path || "Selected folder" : "All local drives";
+  location.title = location.textContent;
+  $("all-drives").hidden = status.scope !== "folder";
+  $("startup-setting").checked = config.startup;
+}
+
 settingsButton.addEventListener("click", () => {
   if (!config) return;
-  $("settings-location").textContent = config.root || "No location selected";
-  $("settings-location").title = config.root || "";
-  $("change-location-note").hidden = !config.root;
-  $("startup-setting").checked = config.startup;
+  updateSettings();
   $("settings").showModal();
   $("close-settings").focus();
 });
 $("settings").addEventListener("close", () => settingsButton.focus());
-$("change-location").addEventListener("click", () => {
-  $("settings").close();
-  send("scan", {drive: false, startup: config.root ? config.startup : setupStartup});
-});
+for (const [id, all_drives] of [["all-drives", true], ["change-location", false]]) {
+  $(id).addEventListener("click", () => {
+    $("settings").close();
+    send("scan", {all_drives});
+  });
+}
 $("startup-setting").addEventListener("change", (event) => send("startup", {enabled: event.target.checked}));
 $("preview-reveal").addEventListener("click", () => {
-  if (previewEntry) send("reveal", {id: previewEntry.id});
+  if (previewEntry) send("reveal", {drive: previewEntry.drive, id: previewEntry.id});
   $("preview").close();
 });
 $("preview").addEventListener("close", () => {
@@ -764,7 +848,7 @@ $("preview").addEventListener("close", () => {
 
 document.addEventListener("keydown", (event) => {
   if (document.querySelector("dialog[open]")) return;
-  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && config?.root) {
+  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "f" && config) {
     event.preventDefault();
     if ($("query")) $("query").focus();
     else go(freshView("search"), true);
@@ -784,20 +868,20 @@ window.SpaceTrail = {
   receive(event, data) {
     switch (event) {
       case "config": {
-        const sameRoot = config && config.root === data.root;
+        const first = config === null;
         config = data;
-        $("startup-setting").checked = config.startup;
-        if (!sameRoot) {
-          clearMessage();
-          status = {phase: data.root ? "starting" : "loading", indexed: 0, processed: 0, blocked: 0, capacity: null};
-          view = freshView("storage");
-          stack = [view];
-          position = 0;
-          if (config.root) showView(false, false);
-          else renderScreen();
-        }
+        updateSettings();
+        if (first) showView(false, false);
         break;
       }
+      case "scope_changed":
+        status = {scope: "all_drives", drives: [], paused: false};
+        clearMessage();
+        view = freshView("files");
+        stack = [view];
+        position = 0;
+        showView(false, false);
+        break;
       case "status":
         status = data;
         renderStatus();

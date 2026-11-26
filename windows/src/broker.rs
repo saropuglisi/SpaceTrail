@@ -57,7 +57,7 @@ pub fn scan_once(support: &Path, root: &Path) -> Result<()> {
     let stop = AtomicBool::new(false);
     loop {
         advance_recovery(&mut db)?;
-        if !scan::step(&mut db, &support, &stop)? && !recovering(&db)? {
+        if !scan::step(&mut db, &root, &support, &stop)? && !recovering(&db)? {
             break;
         }
     }
@@ -100,26 +100,81 @@ fn watch(root: &Path) -> (Option<RecommendedWatcher>, Receiver<Event>, Arc<Atomi
     (watcher, receive, overflow)
 }
 
-fn run_scope(support: &Path, settings: &Settings, stop: &AtomicBool) -> Result<()> {
-    let root = &settings.root;
-    let mut db = writer(support, root)?;
-    let (mut watcher, events, mut overflow) = watch(root);
-    let mut receive = events;
-    // Work missed while SpaceTrail was stopped is reconciled from the last saved
-    // directory index. A lost notification uses the same bounded recovery.
-    let has_progress: bool = db.query_row(
-        "SELECT baseline OR processed>0 FROM state WHERE id=1",
-        [],
-        |r| r.get(0),
-    )?;
-    if has_progress {
-        start_recovery(&db)?;
+struct Scanner {
+    db: Connection,
+    root: PathBuf,
+    watcher: Option<RecommendedWatcher>,
+    events: Receiver<Event>,
+    overflow: Arc<AtomicBool>,
+    next_sample: Instant,
+    next_fallback: Instant,
+    next_maintenance: Instant,
+}
+
+impl Scanner {
+    fn open(index: &Path, root: &Path) -> Result<Self> {
+        fs::create_dir_all(index)?;
+        let db = writer(index, root)?;
+        let (watcher, events, overflow) = watch(root);
+        // Reconcile changes that occurred while the broker was stopped.
+        if db.query_row(
+            "SELECT baseline OR processed>0 FROM state WHERE id=1",
+            [],
+            |row| row.get::<_, bool>(0),
+        )? {
+            start_recovery(&db)?;
+        }
+        let tick = Instant::now();
+        Ok(Self {
+            db,
+            root: root.to_owned(),
+            watcher,
+            events,
+            overflow,
+            next_sample: tick,
+            next_fallback: tick + Duration::from_secs(30),
+            next_maintenance: tick + Duration::from_secs(15 * 60),
+        })
     }
-    let mut next_sample = Instant::now();
+
+    fn step(&mut self, support: &Path, stop: &AtomicBool) -> Result<bool> {
+        let tick = Instant::now();
+        if !self.root.is_dir() {
+            return Ok(false);
+        }
+        if tick >= self.next_sample {
+            record_capacity(&self.db, &self.root)?;
+            self.next_sample = tick + Duration::from_secs(300);
+        }
+        if tick >= self.next_fallback && self.watcher.is_none() {
+            (self.watcher, self.events, self.overflow) = watch(&self.root);
+            if !recovering(&self.db)? {
+                start_recovery(&self.db)?;
+            }
+            self.next_fallback = tick + Duration::from_secs(60);
+        }
+        if self.overflow.swap(false, Ordering::Relaxed) {
+            start_recovery(&self.db)?;
+        }
+        let count = schedule_events(&mut self.db, &self.root, support, &self.events)?;
+        if count == 0 {
+            advance_recovery(&mut self.db)?;
+        }
+        if tick >= self.next_maintenance {
+            schedule_audit_slice(&mut self.db)?;
+            self.next_maintenance = tick + Duration::from_secs(15 * 60);
+        }
+        let working = scan::step(&mut self.db, &self.root, support, stop)?;
+        if !working {
+            finish_first_scan(&self.db)?;
+        }
+        Ok(working || count > 0)
+    }
+}
+
+fn run_scope(support: &Path, settings: &Settings, stop: &AtomicBool) -> Result<()> {
+    let mut scanner = Scanner::open(support, &settings.root)?;
     let mut next_settings = Instant::now();
-    let mut next_fallback = Instant::now() + Duration::from_secs(30);
-    let mut next_maintenance = Instant::now() + Duration::from_secs(15 * 60);
-    let mut parked_event = None;
     while !stop.load(Ordering::Relaxed) {
         let tick = Instant::now();
         if tick >= next_settings {
@@ -128,39 +183,81 @@ fn run_scope(support: &Path, settings: &Settings, stop: &AtomicBool) -> Result<(
             }
             next_settings = tick + Duration::from_secs(2);
         }
-        if tick >= next_sample {
-            record_capacity(&db, root)?;
-            next_sample = tick + Duration::from_secs(300);
-        }
-        if tick >= next_fallback && watcher.is_none() {
-            (watcher, receive, overflow) = watch(root);
-            if !recovering(&db)? {
-                start_recovery(&db)?;
-            }
-            next_fallback = tick + Duration::from_secs(60);
-        }
-        if overflow.swap(false, Ordering::Relaxed) {
-            start_recovery(&db)?;
-        }
+        let working = scanner.step(support, stop)?;
+        std::thread::sleep(Duration::from_millis(if working { 12 } else { 400 }));
+    }
+    Ok(())
+}
 
-        let count = schedule_events(&mut db, root, support, parked_event.take(), &receive)?;
-        if count == 0 {
-            advance_recovery(&mut db)?;
+#[cfg(windows)]
+pub fn run_catalog(support: &Path, stop: &AtomicBool) -> Result<()> {
+    use crate::catalog::{Catalog, Location};
+
+    let Some(_lock) = claim(support, "broker.lock")? else {
+        return Ok(());
+    };
+    let support = support.canonicalize()?;
+    let mut scanners: BTreeMap<PathBuf, Scanner> = BTreeMap::new();
+    let mut retry_at: BTreeMap<PathBuf, Instant> = BTreeMap::new();
+    let mut locations: Vec<Location> = Vec::new();
+    let mut next_inventory = Instant::now();
+    let mut check_mount = Instant::now();
+    while !stop.load(Ordering::Relaxed) {
+        let tick = Instant::now();
+        if tick >= next_inventory {
+            locations = Catalog::for_indexer(&support)?.locations;
+            scanners.retain(|index, scanner| {
+                locations.iter().any(|location| {
+                    location.index == *index
+                        && location.root == scanner.root
+                        && location.available()
+                })
+            });
+            retry_at.retain(|index, _| locations.iter().any(|location| location.index == *index));
+            next_inventory = tick + Duration::from_secs(2);
         }
-        if tick >= next_maintenance {
-            schedule_audit_slice(&mut db)?;
-            next_maintenance = tick + Duration::from_secs(15 * 60);
+        let validate_mounts = tick >= check_mount;
+        if validate_mounts {
+            check_mount = tick + Duration::from_millis(200);
         }
-        if scan::step(&mut db, support, stop)? {
-            std::thread::sleep(Duration::from_millis(if count > 0 { 2 } else { 12 }));
-        } else {
-            finish_first_scan(&db)?;
-            if watcher.is_some() {
-                parked_event = receive.recv_timeout(Duration::from_millis(700)).ok();
-            } else {
-                std::thread::sleep(Duration::from_millis(700));
+        let mut working = false;
+        for location in &locations {
+            if stop.load(Ordering::Relaxed) {
+                break;
+            }
+            let index = &location.index;
+            if !location.available() || retry_at.get(index).is_some_and(|date| tick < *date) {
+                continue;
+            }
+            if validate_mounts && !location.still_mounted() {
+                scanners.remove(index);
+                next_inventory = tick;
+                continue;
+            }
+            let result = (|| -> Result<bool> {
+                if !scanners.contains_key(index) {
+                    if !location.still_mounted() {
+                        return Ok(false);
+                    }
+                    scanners.insert(index.clone(), Scanner::open(index, &location.root)?);
+                    let _ = fs::remove_file(index.join("scan-error.txt"));
+                }
+                scanners
+                    .get_mut(index)
+                    .expect("open scanner")
+                    .step(&support, stop)
+            })();
+            match result {
+                Ok(did_work) => working |= did_work,
+                Err(error) => {
+                    scanners.remove(index);
+                    retry_at.insert(index.clone(), tick + Duration::from_secs(15));
+                    let _ = fs::write(index.join("scan-error.txt"), format!("{error:#}"));
+                }
             }
         }
+        // A single writer thread shares work among drives to avoid concurrent scans.
+        std::thread::sleep(Duration::from_millis(if working { 12 } else { 400 }));
     }
     Ok(())
 }
@@ -169,12 +266,11 @@ fn schedule_events(
     db: &mut Connection,
     root: &Path,
     support: &Path,
-    first: Option<Event>,
     rx: &Receiver<Event>,
 ) -> Result<usize> {
     let mut paths = BTreeMap::new();
     let mut seen = 0;
-    for event in first.into_iter().chain(rx.try_iter()).take(EVENT_LIMIT) {
+    for event in rx.try_iter().take(EVENT_LIMIT) {
         let rename = matches!(
             event.kind,
             EventKind::Modify(notify::event::ModifyKind::Name(_))
@@ -331,7 +427,7 @@ fn schedule_audit_slice(db: &mut Connection) -> Result<()> {
 
 fn finish_first_scan(db: &Connection) -> Result<()> {
     if db.execute(
-        "UPDATE state SET baseline=1,started=? WHERE id=1 AND NOT baseline
+        "UPDATE state SET baseline=1,started=? WHERE id=1 AND NOT baseline AND recovery_cursor IS NULL
                    AND NOT EXISTS(SELECT 1 FROM pending WHERE due<=?)
                    AND NOT EXISTS(SELECT 1 FROM entries WHERE parent IS NULL AND blocked=1)",
         params![now(), now()],

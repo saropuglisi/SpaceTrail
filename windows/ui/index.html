@@ -11,24 +11,33 @@
   <a class="skip" href="#main">Skip to content</a>
   <div class="shell">
     <aside class="sidebar" aria-label="SpaceTrail">
-      <div class="brand"><img src="../assets/spacetrail.png" alt="" width="34" height="34"><span>SpaceTrail</span></div>
       <nav id="navigation" aria-label="Views"></nav>
       <div class="sidebar-bottom">
         <div class="sidebar-drive" id="sidebar-drive" hidden></div>
-        <button class="nav-button" id="settings-button" type="button"></button>
       </div>
     </aside>
-    <main id="main" tabindex="-1">
-      <div id="message" class="message" role="status" hidden></div>
-      <div id="screen"><div class="empty"><h2>Opening SpaceTrail</h2></div></div>
-    </main>
+    <div class="workspace">
+      <header class="toolbar" aria-label="SpaceTrail toolbar">
+        <div class="toolbar-group" id="history-actions"></div>
+        <div class="brand"><img src="../assets/spacetrail.png" alt="" width="23" height="23"><span>SpaceTrail</span></div>
+        <div class="toolbar-group toolbar-end">
+          <button class="square" id="search-button" type="button" aria-label="Search disks" title="Search disks (Ctrl+F)"></button>
+          <button class="square" id="settings-button" type="button" aria-label="Settings" title="Settings"></button>
+        </div>
+      </header>
+      <main id="main" tabindex="-1">
+        <div id="message" class="message" role="status" hidden></div>
+        <div id="screen"><div class="empty"><h2>Opening SpaceTrail</h2></div></div>
+      </main>
+    </div>
   </div>
   <dialog id="settings" aria-labelledby="settings-title">
     <div class="dialog-title"><h2 id="settings-title">Settings</h2><button type="button" class="square" id="close-settings" aria-label="Close settings"></button></div>
     <section class="setting">
       <h3>Scan location</h3>
       <p id="settings-location" class="path"></p>
-      <p id="change-location-note">Picking a different location replaces the current index.</p>
+      <p>Scan all local drives automatically or limit indexing to one folder.</p>
+      <button type="button" id="all-drives" class="button" hidden>Scan all drives</button>
       <button type="button" id="change-location" class="button">Choose a folder…</button>
     </section>
     <section class="setting">

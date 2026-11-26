@@ -1,4 +1,6 @@
 pub mod broker;
+#[cfg(windows)]
+pub mod catalog;
 pub mod index;
 pub mod platform;
 mod scan;
@@ -26,24 +28,30 @@ impl Settings {
     }
 
     pub fn choose(support: &Path, root: &Path) -> Result<Self> {
-        let root = root
-            .canonicalize()
-            .context("Cannot open the selected folder")?;
-        if !root.is_dir() || root.to_str().is_none() {
-            bail!("Select a readable folder with a valid Windows path.");
-        }
-        fs::read_dir(&root).context("Cannot list the selected folder")?;
-        fs::create_dir_all(support)?;
-        let support_path = support.canonicalize()?;
-        if root.starts_with(&support_path) {
-            bail!("Select a location outside SpaceTrail’s index folder.");
-        }
-        let settings = Self { root };
+        let settings = Self {
+            root: readable_root(support, root)?,
+        };
         let pending = support.join("settings.json.new");
         fs::write(&pending, serde_json::to_vec(&settings)?)?;
         fs::rename(pending, support.join("settings.json"))?;
         Ok(settings)
     }
+}
+
+fn readable_root(support: &Path, root: &Path) -> Result<PathBuf> {
+    let root = root
+        .canonicalize()
+        .context("Cannot open the selected folder")?;
+    if !root.is_dir() || root.to_str().is_none() {
+        bail!("Select a readable folder with a valid Windows path.");
+    }
+    fs::read_dir(&root).context("Cannot list the selected folder")?;
+    fs::create_dir_all(support)?;
+    let support_path = support.canonicalize()?;
+    if root.starts_with(&support_path) {
+        bail!("Select a location outside SpaceTrail’s index folder.");
+    }
+    Ok(root)
 }
 
 pub fn now() -> i64 {
@@ -74,7 +82,7 @@ pub fn display_path(path: &Path) -> String {
     }
 }
 
-pub(crate) fn fold_name(value: &str) -> String {
+pub fn fold_name(value: &str) -> String {
     use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
     value
         .nfkd()

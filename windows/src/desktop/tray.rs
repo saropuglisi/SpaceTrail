@@ -1,6 +1,6 @@
 use super::{icon, module, shell, text, win_result};
 use anyhow::Result;
-use spacetrail::{Settings, broker, format_size, platform};
+use spacetrail::{broker, catalog::Catalog, format_size};
 use std::{
     fs,
     mem::{size_of, zeroed},
@@ -30,9 +30,6 @@ pub fn run(support: PathBuf) -> Result<()> {
     let Some(_lock) = broker::claim(&support, "tray.lock")? else {
         return Ok(());
     };
-    if Settings::read(&support)?.is_none() {
-        return Ok(());
-    }
     let stop = Arc::new(AtomicBool::new(false));
     let state = Box::new(Tray {
         support: support.clone(),
@@ -77,7 +74,7 @@ pub fn run(support: PathBuf) -> Result<()> {
             let mut retry = 2;
             while !stop.load(Ordering::Relaxed) {
                 let began = std::time::Instant::now();
-                if let Err(error) = broker::run(&support, Arc::clone(&stop)) {
+                if let Err(error) = broker::run_catalog(&support, &stop) {
                     let _ = fs::write(&error_file, format!("{error:#}"));
                 }
                 if began.elapsed() >= Duration::from_secs(30) {
@@ -184,13 +181,13 @@ unsafe fn menu(hwnd: HWND, state: &Tray) {
         return;
     }
     AppendMenuW(menu, MF_STRING, 1, text("Open SpaceTrail").as_ptr());
-    let label = Settings::read(&state.support)
-        .ok()
-        .flatten()
-        .and_then(|setting| platform::capacity(&setting.root))
-        .map(|space| format!("{} free", format_size(space.free)));
-    if let Some(label) = label {
-        AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, text(&label).as_ptr());
+    if let Ok(catalog) = Catalog::read(&state.support) {
+        for location in catalog.locations {
+            if let Some(space) = location.capacity {
+                let label = format!("{} · {} free", location.label, format_size(space.free));
+                AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, text(&label).as_ptr());
+            }
+        }
     }
     AppendMenuW(menu, MF_SEPARATOR, 0, null());
     AppendMenuW(menu, MF_STRING, 2, text("Quit Background Updates").as_ptr());

@@ -23,10 +23,10 @@ VIAddVersionKey "LegalCopyright" "SpaceTrail contributors"
 !define MUI_UNICON "..\assets\spacetrail.ico"
 !define MUI_WELCOMEFINISHPAGE_BITMAP "welcome.bmp"
 !define MUI_ABORTWARNING
-!define MUI_WELCOMEPAGE_TITLE "Install SpaceTrail"
-!define MUI_WELCOMEPAGE_TEXT "SpaceTrail shows what is using space on your PC and keeps the results up to date.$\r$\n$\r$\nSetup installs SpaceTrail for your Windows account and adds it to the Start menu."
+!define MUI_WELCOMEPAGE_TITLE "Set up SpaceTrail"
+!define MUI_WELCOMEPAGE_TEXT "Install or update SpaceTrail for your Windows account. Setup closes any running copy and keeps your saved index.$\r$\n$\r$\nNew installations start indexing local drives automatically."
 !define MUI_FINISHPAGE_TITLE "SpaceTrail is installed"
-!define MUI_FINISHPAGE_TEXT "Open SpaceTrail to choose a drive or folder. If you have used SpaceTrail before, SpaceTrail will open your saved index."
+!define MUI_FINISHPAGE_TEXT "Open SpaceTrail to view your files and scan progress. SpaceTrail continues indexing in the notification area."
 !define MUI_FINISHPAGE_RUN "$INSTDIR\SpaceTrail.exe"
 !define MUI_FINISHPAGE_RUN_TEXT "Open SpaceTrail"
 !define MUI_UNCONFIRMPAGE_TEXT_TOP "This removes SpaceTrail, its Start menu shortcut, and its sign-in entry. Saved scan data remains in your Local AppData folder."
@@ -88,19 +88,29 @@ Section "SpaceTrail"
   SetOutPath "$PLUGINSDIR"
   File "/oname=SpaceTrail.exe" "${APP_EXE}"
   DetailPrint "Closing any running copy of SpaceTrail"
+  ClearErrors
   ExecWait '"$PLUGINSDIR\SpaceTrail.exe" --shutdown' $0
-  ${If} $0 != 0
+  ${If} ${Errors}
+  ${OrIf} $0 != 0
     SetErrorLevel 1
     Abort "Close SpaceTrail before running setup."
   ${EndIf}
 
   SetOutPath "$INSTDIR"
   ClearErrors
-  CopyFiles /SILENT "$PLUGINSDIR\SpaceTrail.exe" "$INSTDIR"
+  File "/oname=SpaceTrail.next" "${APP_EXE}"
   ${If} ${Errors}
     SetErrorLevel 1
     Abort "SpaceTrail could not be copied to $INSTDIR."
   ${EndIf}
+  ; Replace the executable in place only after staging the complete new file.
+  System::Call 'kernel32::MoveFileExW(w "$INSTDIR\SpaceTrail.next", w "$INSTDIR\SpaceTrail.exe", i 9) i .r0'
+  ${If} $0 == 0
+    Delete "$INSTDIR\SpaceTrail.next"
+    SetErrorLevel 1
+    Abort "SpaceTrail could not be updated. Close any open copies and run setup again."
+  ${EndIf}
+  ReadRegStr $1 HKCU "${UNINSTALL_KEY}" "DisplayVersion"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\SpaceTrail.lnk" "$INSTDIR\SpaceTrail.exe"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "SpaceTrail"
@@ -114,7 +124,14 @@ Section "SpaceTrail"
   ReadRegStr $0 HKCU "${STARTUP_KEY}" "SpaceTrail"
   ${If} $0 != ""
     WriteRegStr HKCU "${STARTUP_KEY}" "SpaceTrail" '"$INSTDIR\SpaceTrail.exe" --broker'
+  ${ElseIf} $1 == ""
+    IfFileExists "$LOCALAPPDATA\SpaceTrail\settings.json" startup_ready
+    WriteRegStr HKCU "${STARTUP_KEY}" "SpaceTrail" '"$INSTDIR\SpaceTrail.exe" --broker'
   ${EndIf}
+startup_ready:
+  IfSilent done
+  Exec '"$INSTDIR\SpaceTrail.exe" --broker'
+done:
 SectionEnd
 
 Function un.onInit
@@ -133,6 +150,7 @@ Section "Uninstall"
     DeleteRegValue HKCU "${STARTUP_KEY}" "SpaceTrail"
   ${EndIf}
   Delete "$SMPROGRAMS\SpaceTrail.lnk"
+  Delete "$INSTDIR\SpaceTrail.next"
   Delete "$INSTDIR\SpaceTrail.exe"
   Delete "$INSTDIR\Uninstall.exe"
   DeleteRegKey HKCU "${UNINSTALL_KEY}"

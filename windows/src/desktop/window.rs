@@ -1,14 +1,10 @@
+use super::snapshot::{Activity, Job, Revisions, Section, Snapshot, View};
 use super::{icon, module, shell, text, win_result};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
-use spacetrail::{
-    Settings, broker, display_path,
-    index::{Entry, PAGE_SIZE, Reader, Request, Sort, Status, Storage},
-    platform::{self, Capacity},
-};
+use spacetrail::{broker, catalog::Scope};
 use std::{
     borrow::Cow,
-    env,
     mem::size_of,
     num::NonZeroIsize,
     path::{Path, PathBuf},
@@ -76,40 +72,16 @@ fn asset(method: &Method, uri: &Uri) -> Response<Cow<'static, [u8]>> {
     response
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
-#[serde(rename_all = "snake_case")]
-enum Section {
-    Storage,
-    Files,
-    Folders,
-    Search,
-    Map,
-}
-
-#[derive(Clone, Deserialize)]
-struct View {
-    id: u64,
-    section: Section,
-    folder: Option<i64>,
-    query: String,
-    format: String,
-    hide_system: bool,
-    sort: Sort,
-    ascending: bool,
-    offset: usize,
-    days: i64,
-}
-
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case", tag = "command")]
 enum Command {
     Ready,
     View(View),
-    Scan { drive: bool, startup: bool },
+    Scan { all_drives: bool },
     Startup { enabled: bool },
     Retry,
-    Reveal { id: i64 },
-    Preview { id: i64, token: u64 },
+    Reveal { drive: String, id: i64 },
+    Preview { drive: String, id: i64, token: u64 },
 }
 
 struct Handle(HWND);
@@ -139,163 +111,6 @@ impl Drop for Com {
     fn drop(&mut self) {
         unsafe { CoUninitialize() };
     }
-}
-
-#[derive(Clone)]
-struct Job {
-    root: PathBuf,
-    view: View,
-    since: Option<i64>,
-    starting: bool,
-}
-
-#[derive(Serialize)]
-struct Folder {
-    id: i64,
-    path: String,
-    parent: Option<i64>,
-}
-
-#[derive(Serialize)]
-struct Data {
-    id: u64,
-    items: Vec<Entry>,
-    folder: Option<Folder>,
-    more: bool,
-    storage: Option<Storage>,
-}
-
-#[derive(PartialEq, Eq, Serialize)]
-struct Activity {
-    phase: &'static str,
-    indexed: i64,
-    processed: i64,
-    blocked: i64,
-    capacity: Option<Capacity>,
-}
-
-struct Snapshot {
-    activity: Activity,
-    revision: Option<i64>,
-    data: Result<Option<Data>>,
-}
-
-impl Snapshot {
-    fn load(support: &Path, job: &Job) -> Result<Self> {
-        let capacity = platform::capacity(&job.root);
-        let reader = Reader::open(support)?;
-        let status = match &reader {
-            Some(reader) => reader.status()?.filter(|status| status.root == job.root),
-            None => None,
-        };
-        let phase = if !job.starting
-            && (!broker::running(support) || support.join("broker-error.txt").is_file())
-        {
-            "paused"
-        } else {
-            match &status {
-                None => "starting",
-                Some(status) if !status.baseline => "scanning",
-                Some(status) if status.pending => "updating",
-                Some(_) => "current",
-            }
-        };
-        let activity = Activity {
-            phase,
-            capacity,
-            indexed: status.as_ref().map_or(0, |status| status.indexed),
-            processed: status.as_ref().map_or(0, |status| status.processed),
-            blocked: status.as_ref().map_or(0, |status| status.blocked),
-        };
-        let revision = status.as_ref().map(|status| status.revision);
-        let data = match (reader, status) {
-            (Some(reader), Some(status)) if revision != job.since => {
-                load_data(&reader, &status, &job.view).map(Some)
-            }
-            (Some(_), Some(_)) => Ok(None),
-            _ => Ok(Some(Data {
-                id: job.view.id,
-                items: Vec::new(),
-                folder: None,
-                more: false,
-                storage: None,
-            })),
-        };
-        Ok(Self {
-            activity,
-            revision,
-            data,
-        })
-    }
-}
-
-fn format_extensions(format: &str) -> Vec<String> {
-    let extensions: &[&str] = match format {
-        "pdf" => &["pdf"],
-        "image" => &[
-            "png", "jpg", "jpeg", "webp", "heic", "gif", "svg", "bmp", "tif", "tiff", "avif",
-        ],
-        "video" => &["mp4", "mov", "mkv", "avi", "wmv", "webm", "m4v", "mpeg"],
-        "audio" => &["mp3", "m4a", "flac", "wav", "aac", "ogg", "opus", "wma"],
-        "document" => &[
-            "doc", "docx", "pdf", "rtf", "odt", "txt", "md", "xls", "xlsx", "ppt", "pptx", "csv",
-        ],
-        "ebook" => &["epub", "mobi", "azw", "azw3"],
-        "archive" => &["zip", "7z", "rar", "tar", "gz", "bz2", "xz", "zst"],
-        "installer" => &["msi", "exe", "msix", "appx", "msixbundle", "appxbundle"],
-        _ => &[],
-    };
-    extensions
-        .iter()
-        .map(|extension| (*extension).to_owned())
-        .collect()
-}
-
-fn load_data(reader: &Reader, status: &Status, view: &View) -> Result<Data> {
-    let mut result = Data {
-        id: view.id,
-        items: Vec::new(),
-        folder: None,
-        more: false,
-        storage: None,
-    };
-    if view.section == Section::Storage {
-        result.storage = Some(reader.storage(view.days)?);
-        return Ok(result);
-    }
-    let mut request = Request {
-        query: view.query.trim().chars().take(240).collect(),
-        extensions: format_extensions(&view.format),
-        hide_system: view.hide_system && matches!(view.section, Section::Files | Section::Search),
-        include_folders: view.section == Section::Search,
-        sort: view.sort,
-        ascending: view.ascending,
-        offset: view.offset.min(20_000_000) / PAGE_SIZE * PAGE_SIZE,
-        ..Default::default()
-    };
-    if matches!(view.section, Section::Map | Section::Folders) {
-        let mut id = view.folder.unwrap_or(status.root_id);
-        let mut directory = reader.locate_directory(id)?;
-        if directory.is_none() {
-            id = status.root_id;
-            directory = reader.locate_directory(id)?;
-        }
-        request.folder = Some(id);
-        result.folder = directory.map(|(path, parent)| Folder {
-            id,
-            path: display_path(&path),
-            parent,
-        });
-    }
-    if view.section != Section::Search
-        || !request.query.is_empty()
-        || !request.extensions.is_empty()
-    {
-        let page = reader.page(&request)?;
-        result.items = page.rows;
-        result.more = page.more;
-    }
-    Ok(result)
 }
 
 struct Worker<Input, Output> {
@@ -333,18 +148,16 @@ struct App {
     hwnd: HWND,
     webview: WebView,
     support: PathBuf,
-    config: Option<Settings>,
-    drive: PathBuf,
     commands: Receiver<Command>,
     loader: Worker<Job, (u64, Result<Snapshot>)>,
     previews: Worker<(u64, PathBuf), Preview>,
     view: Option<View>,
-    revision: Option<i64>,
+    revisions: Option<Revisions>,
     activity: Option<Activity>,
     loading: bool,
     last_storage_refresh: Instant,
     started: Instant,
-    paths: Vec<(i64, PathBuf)>,
+    paths: Vec<(String, i64, PathBuf)>,
 }
 
 impl App {
@@ -367,15 +180,13 @@ impl App {
         self.emit(
             "config",
             serde_json::json!({
-                "root": self.config.as_ref().map(|settings| display_path(&settings.root)),
-                "startup": shell::launch_at_login(),
-                "drive": display_path(&self.drive)
+                "startup": shell::launch_at_login()
             }),
         );
     }
 
     fn refresh(&mut self, force: bool) {
-        let (Some(config), Some(view)) = (&self.config, &self.view) else {
+        let Some(view) = &self.view else {
             return;
         };
         if self.loading && !force {
@@ -385,12 +196,11 @@ impl App {
         let check_history =
             is_storage && self.last_storage_refresh.elapsed() > Duration::from_secs(60);
         let job = Job {
-            root: config.root.clone(),
             view: view.clone(),
             since: if force || check_history {
                 None
             } else {
-                self.revision
+                self.revisions.clone()
             },
             starting: self.started.elapsed() < Duration::from_secs(6),
         };
@@ -428,14 +238,14 @@ impl App {
         }
         match snapshot.data {
             Ok(Some(data)) => {
-                self.revision = snapshot.revision;
+                self.revisions = Some(snapshot.revisions);
                 let mut paths: Vec<_> = data
                     .items
                     .iter()
-                    .map(|entry| (entry.id, entry.path.clone()))
+                    .map(|item| (item.drive.clone(), item.entry.id, item.entry.path.clone()))
                     .collect();
                 if let Some(folder) = &data.folder {
-                    paths.push((folder.id, PathBuf::from(&folder.path)));
+                    paths.push((folder.drive.clone(), folder.id, PathBuf::from(&folder.path)));
                 }
                 if let Some(storage) = &data.storage {
                     self.last_storage_refresh = Instant::now();
@@ -445,7 +255,9 @@ impl App {
                             .iter()
                             .chain(&storage.folders)
                             .chain(&storage.largest)
-                            .map(|entry| (entry.id, entry.path.clone())),
+                            .map(|item| {
+                                (item.drive.clone(), item.entry.id, item.entry.path.clone())
+                            }),
                     );
                 }
                 self.paths = paths;
@@ -463,30 +275,20 @@ impl App {
         }
     }
 
-    fn lookup(&self, id: i64) -> Option<&Path> {
+    fn lookup(&self, drive: &str, id: i64) -> Option<&Path> {
         self.paths
             .iter()
-            .find(|(entry, _)| *entry == id)
-            .map(|(_, path)| path.as_path())
+            .find(|(volume, entry, _)| volume == drive && *entry == id)
+            .map(|(_, _, path)| path.as_path())
     }
 
-    fn configure(&mut self, path: PathBuf, startup: bool) -> Result<()> {
-        let first = self.config.is_none();
-        let settings = Settings::choose(&self.support, &path)?;
-        let changed = self.config.as_ref() != Some(&settings);
-        self.config = Some(settings);
-        if changed {
-            self.activity = None;
-            self.view = None;
-            self.paths.clear();
-        }
+    fn configure(&mut self, folder: Option<PathBuf>) -> Result<()> {
+        Scope::set(&self.support, folder.as_deref())?;
+        self.activity = None;
+        self.paths.clear();
         self.started = Instant::now();
-        self.settings();
         shell::ensure_broker(&self.support).context("Could not start background updates")?;
-        if first {
-            shell::set_launch_at_login(startup).context("Could not save the sign-in preference")?;
-            self.settings();
-        }
+        self.emit("scope_changed", ());
         Ok(())
     }
 
@@ -498,18 +300,14 @@ impl App {
             }
             Command::View(view) => {
                 self.view = Some(view);
-                self.revision = None;
+                self.revisions = None;
                 self.refresh(true);
                 Ok(())
             }
-            Command::Scan { drive, startup } => {
-                let selected = if drive {
-                    Ok(Some(self.drive.clone()))
-                } else {
-                    shell::folder_dialog(self.hwnd)
-                };
-                selected.and_then(|path| match path {
-                    Some(path) => self.configure(path, startup),
+            Command::Scan { all_drives: true } => self.configure(None),
+            Command::Scan { all_drives: false } => {
+                shell::folder_dialog(self.hwnd).and_then(|path| match path {
+                    Some(path) => self.configure(Some(path)),
                     None => Ok(()),
                 })
             }
@@ -523,12 +321,12 @@ impl App {
                 self.started = Instant::now();
                 shell::ensure_broker(&self.support).context("Could not start background updates")
             }
-            Command::Reveal { id } => match self.lookup(id) {
+            Command::Reveal { drive, id } => match self.lookup(&drive, id) {
                 Some(path) => shell::reveal(path),
                 None => Ok(()),
             },
-            Command::Preview { id, token } => {
-                if let Some(path) = self.lookup(id) {
+            Command::Preview { drive, id, token } => {
+                if let Some(path) = self.lookup(&drive, id) {
                     let _ = self.previews.send.send((token, path.to_owned()));
                 } else {
                     self.emit("preview", Preview { token, image: None });
@@ -555,10 +353,7 @@ pub fn run(support: PathBuf) -> Result<()> {
     let Some(_instance) = broker::claim(&support, "window.lock")? else {
         return Ok(());
     };
-    let config = Settings::read(&support)?;
-    if config.is_some() {
-        let _ = shell::ensure_broker(&support);
-    }
+    let _ = shell::ensure_broker(&support);
     let _com = Com::initialize()?;
     let hwnd = unsafe {
         let registration = WNDCLASSW {
@@ -591,6 +386,7 @@ pub fn run(support: PathBuf) -> Result<()> {
     };
     let (send, commands) = mpsc::channel();
     let callback = hwnd as usize;
+    let dark = shell::prefers_dark();
     let mut context = WebContext::new(Some(support.join("WebView")));
     let webview = WebViewBuilder::new_with_web_context(&mut context)
         .with_custom_protocol("spacetrail".to_owned(), |_, request| {
@@ -598,7 +394,11 @@ pub fn run(support: PathBuf) -> Result<()> {
         })
         .with_https_scheme(true)
         .with_url(APP_PAGE)
-        .with_background_color((19, 22, 32, 255))
+        .with_background_color(if dark {
+            (30, 30, 30, 255)
+        } else {
+            (250, 250, 250, 255)
+        })
         .with_default_context_menus(false)
         .with_browser_accelerator_keys(false)
         .with_navigation_handler(|url| url.parse::<Uri>().is_ok_and(|uri| is_app_page(&uri)))
@@ -631,26 +431,15 @@ pub fn run(support: PathBuf) -> Result<()> {
             image: com.as_ref().and_then(|_| shell::preview(&path)),
         })
     });
-    let drive = env::var("SystemDrive")
-        .ok()
-        .filter(|name| {
-            name.len() == 2 && name.as_bytes()[0].is_ascii_alphabetic() && name.ends_with(':')
-        })
-        .map_or_else(
-            || PathBuf::from(r"C:\"),
-            |name| PathBuf::from(format!("{name}\\")),
-        );
     let mut app = App {
         hwnd,
         webview,
         support,
-        config,
-        drive,
         commands,
         loader,
         previews,
         view: None,
-        revision: None,
+        revisions: None,
         activity: None,
         loading: false,
         last_storage_refresh: Instant::now(),
@@ -658,7 +447,7 @@ pub fn run(support: PathBuf) -> Result<()> {
         paths: Vec::new(),
     };
     unsafe {
-        let dark: i32 = 1;
+        let dark = i32::from(dark);
         DwmSetWindowAttribute(
             hwnd,
             DWMWA_USE_IMMERSIVE_DARK_MODE as u32,
