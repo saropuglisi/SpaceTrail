@@ -12,3 +12,6 @@ xcuserdata/
 *.sqlite-wal
 /.env
 /.env.local
+
+# Windows build artifacts
+/windows/target/
