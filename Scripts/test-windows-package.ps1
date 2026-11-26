@@ -61,7 +61,10 @@ function Test-Window($Mode) {
             Wait-For { Named $Window 'Recent growth' } 'the saved storage overview' | Out-Null
             $Search = @(Wait-For { Named $Window 'Search' } 'the Search view button')[0]
             Invoke-Control $Search
-            $Box = @(Wait-For { Named $Window 'Search by name' } 'the search field')[0]
+            $Box = @(Wait-For {
+                Named $Window 'Search by name' |
+                    Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit }
+            } 'the search field')[0]
             $Box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Field notes')
             $Submit = @(Named $Window 'Search')[-1]
             Invoke-Control $Submit

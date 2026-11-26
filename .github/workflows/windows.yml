@@ -47,11 +47,11 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'Could not install NSIS.' }
           }
           ./Scripts/package-windows.ps1 -Architecture '${{ matrix.arch }}' -MakeNsis $Nsis
-      - name: Verify installation and desktop
-        shell: powershell
-        run: ./Scripts/test-windows-package.ps1 -Architecture '${{ matrix.arch }}'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: SpaceTrail-Setup-${{ matrix.arch }}
           path: dist/windows/SpaceTrail-Setup-${{ matrix.arch }}.exe
           if-no-files-found: error
+      - name: Verify installation and desktop
+        shell: powershell
+        run: ./Scripts/test-windows-package.ps1 -Architecture '${{ matrix.arch }}'
