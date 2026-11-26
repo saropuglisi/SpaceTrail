@@ -54,7 +54,8 @@ function Test-Window($Mode) {
         } "the installed SpaceTrail window"
 
         if ($Mode -eq 'first-run') {
-            Wait-For { Named $Window 'See what’s using your space' } 'the first-run heading' | Out-Null
+            $Heading = "See what{0}s using your space" -f [char]0x2019
+            Wait-For { Named $Window $Heading } 'the first-run heading' | Out-Null
             Wait-For { Named $Window 'Start background updates at sign-in' } 'the first-run sign-in option' | Out-Null
         } else {
             Wait-For { Named $Window 'Recent growth' } 'the saved storage overview' | Out-Null
@@ -92,7 +93,8 @@ New-Item -ItemType Directory -Path $Scan, $Support -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $Scan 'Field notes.pdf') -Value '%PDF-1.7'
 Set-Content -LiteralPath (Join-Path $Scan 'Project notes.txt') -Value 'A fixture for Windows Search.'
 Run-Checked $App @('--scan-once', ('"{0}"' -f $Scan), ('"{0}"' -f $Support))
-@{root = '\\?\' + $Scan} | ConvertTo-Json -Compress | Set-Content -LiteralPath $Settings -Encoding utf8NoBOM
+$FixtureSettings = @{root = '\\?\' + $Scan} | ConvertTo-Json -Compress
+[IO.File]::WriteAllText($Settings, $FixtureSettings, [Text.UTF8Encoding]::new($false))
 New-Item -Path $StartKey -Force | Out-Null
 Set-ItemProperty -Path $StartKey -Name 'SpaceTrail' -Value '"C:\Portable\SpaceTrail-x64.exe" --broker'
 Run-Checked $Setup '/S'

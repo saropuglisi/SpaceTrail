@@ -48,7 +48,7 @@ jobs:
           }
           ./Scripts/package-windows.ps1 -Architecture '${{ matrix.arch }}' -MakeNsis $Nsis
       - name: Verify installation and desktop
-        shell: pwsh
+        shell: powershell
         run: ./Scripts/test-windows-package.ps1 -Architecture '${{ matrix.arch }}'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
