@@ -65,7 +65,12 @@ function Test-Window($Mode) {
             $Box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Field notes')
             $Submit = @(Named $Window 'Search')[-1]
             Invoke-Control $Submit
-            Wait-For { Named $Window 'Field notes.pdf' } 'the saved search result' | Out-Null
+            Wait-For {
+                $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+                    [System.Windows.Automation.Condition]::TrueCondition) |
+                    Where-Object { $_.Current.Name -like 'Field notes.pdf*' } |
+                    Select-Object -First 1
+            } 'the saved search result' | Out-Null
             $SettingsButton = @(Named $Window 'Settings')[0]
             Invoke-Control $SettingsButton
             Wait-For { Named $Window 'Close settings' } 'the settings dialog' | Out-Null

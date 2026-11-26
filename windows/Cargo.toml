@@ -16,7 +16,7 @@ unicode-normalization = "0.1"
 [target.'cfg(windows)'.dependencies]
 base64 = "0.22"
 png = "0.18"
-wry = { version = "0.54.4", default-features = false }
+wry = { version = "0.54.4", default-features = false, features = ["protocol"] }
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
@@ -37,7 +37,6 @@ windows-sys = { version = "0.61", features = [
 ] }
 
 [build-dependencies]
-base64 = "0.22"
 embed-resource = "3"
 
 [profile.dev]

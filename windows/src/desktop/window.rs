@@ -7,6 +7,7 @@ use spacetrail::{
     platform::{self, Capacity},
 };
 use std::{
+    borrow::Cow,
     env,
     mem::size_of,
     num::NonZeroIsize,
@@ -27,6 +28,7 @@ use windows_sys::Win32::{
 };
 use wry::{
     NewWindowResponse, WebContext, WebView, WebViewBuilder, WebViewBuilderExtWindows,
+    http::{Method, Response, StatusCode, Uri, header},
     raw_window_handle::{
         HandleError, HasWindowHandle, RawWindowHandle, Win32WindowHandle, WindowHandle,
     },
@@ -35,7 +37,44 @@ use wry::{
 const WAKE: u32 = WM_APP + 1;
 const HISTORY: u32 = WM_APP + 2;
 const TIMER: usize = 1;
-const PAGE: &str = include_str!(concat!(env!("OUT_DIR"), "/window.html"));
+const APP_PAGE: &str = "spacetrail://local.invalid/index.html";
+const APP_HOST: &str = "spacetrail.local.invalid";
+
+fn is_app_page(uri: &Uri) -> bool {
+    uri.scheme_str() == Some("https")
+        && uri.host() == Some(APP_HOST)
+        && uri.port().is_none()
+        && uri
+            .path_and_query()
+            .is_some_and(|path| path.as_str() == "/index.html")
+}
+
+fn asset(method: &Method, uri: &Uri) -> Response<Cow<'static, [u8]>> {
+    const INDEX: &[u8] = include_bytes!("../../ui/index.html");
+    const STYLE: &[u8] = include_bytes!("../../ui/ui.css");
+    const SCRIPT: &[u8] = include_bytes!("../../ui/app.js");
+    const LOGO: &[u8] = include_bytes!("../../assets/spacetrail.png");
+    let (mime, body) = if method == Method::GET && uri.host() == Some("local.invalid") {
+        match uri.path() {
+            "/index.html" => ("text/html; charset=utf-8", INDEX),
+            "/ui.css" => ("text/css; charset=utf-8", STYLE),
+            "/app.js" => ("text/javascript; charset=utf-8", SCRIPT),
+            "/assets/spacetrail.png" => ("image/png", LOGO),
+            _ => ("text/plain", &[][..]),
+        }
+    } else {
+        ("text/plain", &[][..])
+    };
+    let mut response = Response::new(Cow::Borrowed(body));
+    if body.is_empty() {
+        *response.status_mut() = StatusCode::NOT_FOUND;
+    }
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        mime.parse().expect("valid asset MIME type"),
+    );
+    response
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
@@ -554,14 +593,18 @@ pub fn run(support: PathBuf) -> Result<()> {
     let callback = hwnd as usize;
     let mut context = WebContext::new(Some(support.join("WebView")));
     let webview = WebViewBuilder::new_with_web_context(&mut context)
-        .with_html(PAGE)
+        .with_custom_protocol("spacetrail".to_owned(), |_, request| {
+            asset(request.method(), request.uri())
+        })
+        .with_https_scheme(true)
+        .with_url(APP_PAGE)
         .with_background_color((19, 22, 32, 255))
         .with_default_context_menus(false)
         .with_browser_accelerator_keys(false)
-        .with_navigation_handler(|url| url == "about:blank" || url.starts_with("about:blank#"))
+        .with_navigation_handler(|url| url.parse::<Uri>().is_ok_and(|uri| is_app_page(&uri)))
         .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
         .with_ipc_handler(move |request| {
-            if request.uri().to_string() != "about:blank" || request.body().len() > 8192 {
+            if !is_app_page(request.uri()) || request.body().len() > 8192 {
                 return;
             }
             if let Ok(command) = serde_json::from_str(request.body()) {
