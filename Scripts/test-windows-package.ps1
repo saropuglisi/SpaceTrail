@@ -20,15 +20,64 @@ function Run-Checked($File, $Arguments) {
     if ($Process.ExitCode -ne 0) { throw "$File returned exit code $($Process.ExitCode)." }
 }
 
+Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+
+function Wait-For($Condition, $Description) {
+    $Deadline = [DateTime]::UtcNow.AddSeconds(25)
+    do {
+        $Result = & $Condition
+        if ($Result) { return $Result }
+        Start-Sleep -Milliseconds 250
+    } while ([DateTime]::UtcNow -lt $Deadline)
+    throw "Timed out waiting for $Description."
+}
+
+function Named($Window, $Name) {
+    $Condition = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::NameProperty, $Name)
+    $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $Condition)
+}
+
+function Invoke-Control($Control) {
+    $Control.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+}
+
 function Test-Window($Mode) {
-    $Port = Get-Random -Minimum 18200 -Maximum 19900
-    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=$Port"
-    Start-Process -FilePath $App
+    $Process = Start-Process -FilePath $App -PassThru
     try {
-        node (Join-Path $PSScriptRoot 'test-windows-ui.mjs') $Port $Mode
-        if ($LASTEXITCODE -ne 0) { throw "SpaceTrail desktop check failed in $Mode." }
+        $Window = Wait-For {
+            $Process.Refresh()
+            if ($Process.HasExited) { throw "Desktop exited with code $($Process.ExitCode)." }
+            if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
+                [System.Windows.Automation.AutomationElement]::FromHandle($Process.MainWindowHandle)
+            }
+        } "the installed SpaceTrail window"
+
+        if ($Mode -eq 'first-run') {
+            Wait-For { Named $Window 'See what’s using your space' } 'the first-run heading' | Out-Null
+            Wait-For { Named $Window 'Start background updates at sign-in' } 'the first-run sign-in option' | Out-Null
+        } else {
+            Wait-For { Named $Window 'Recent growth' } 'the saved storage overview' | Out-Null
+            $Search = @(Wait-For { Named $Window 'Search' } 'the Search view button')[0]
+            Invoke-Control $Search
+            $Box = @(Wait-For { Named $Window 'Search by name' } 'the search field')[0]
+            $Box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Field notes')
+            $Submit = @(Named $Window 'Search')[-1]
+            Invoke-Control $Submit
+            Wait-For { Named $Window 'Field notes.pdf' } 'the saved search result' | Out-Null
+            $SettingsButton = @(Named $Window 'Settings')[0]
+            Invoke-Control $SettingsButton
+            Wait-For { Named $Window 'Close settings' } 'the settings dialog' | Out-Null
+        }
+        Write-Output "Installed desktop verified ($Mode)"
+    } catch {
+        Write-Output "Window title: $($Process.MainWindowTitle)"
+        if ($Window) {
+            $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, [System.Windows.Automation.Condition]::TrueCondition) |
+                Select-Object -First 50 | ForEach-Object { Write-Output "UI: $($_.Current.Name) ($($_.Current.ControlType.ProgrammaticName))" }
+        }
+        throw
     } finally {
-        Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
         Run-Checked $App '--shutdown'
     }
 }

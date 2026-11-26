@@ -112,6 +112,7 @@ struct Job {
 
 #[derive(Serialize)]
 struct Folder {
+    id: i64,
     path: String,
     parent: Option<i64>,
 }
@@ -242,6 +243,7 @@ fn load_data(reader: &Reader, status: &Status, view: &View) -> Result<Data> {
         }
         request.folder = Some(id);
         result.folder = directory.map(|(path, parent)| Folder {
+            id,
             path: display_path(&path),
             parent,
         });
@@ -393,6 +395,9 @@ impl App {
                     .iter()
                     .map(|entry| (entry.id, entry.path.clone()))
                     .collect();
+                if let Some(folder) = &data.folder {
+                    paths.push((folder.id, PathBuf::from(&folder.path)));
+                }
                 if let Some(storage) = &data.storage {
                     self.last_storage_refresh = Instant::now();
                     paths.extend(

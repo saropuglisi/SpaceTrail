@@ -499,7 +499,7 @@ impl Reader {
             "SELECT e.id,e.directory FROM state s JOIN entries e ON e.directory=s.root WHERE s.id=1",
             [], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
-        let Some((id, path)) = root.filter(|(_, path)| is_drive_root(Path::new(path))) else {
+        let Some((id, _)) = root.filter(|(_, path)| is_drive_root(Path::new(path))) else {
             return Ok(());
         };
         predicates.push(

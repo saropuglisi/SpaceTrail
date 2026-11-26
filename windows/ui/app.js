@@ -1,3 +1,4 @@
+(() => {
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -61,6 +62,7 @@ let previewEntry = null;
 let previewTrigger = null;
 let setupStartup = true;
 let lastHistoryShortcut = -Infinity;
+let largestGroup = "folders";
 
 function node(tag, classes, content) {
   const result = document.createElement(tag);
@@ -155,12 +157,13 @@ function historyShortcut(delta) {
   changeHistory(delta);
 }
 
-function showView(focusQuery = false) {
+function showView(focusQuery = false, focusHeading = true) {
   loaded = null;
   window.scrollTo(0, 0);
   renderScreen();
   loadView();
   if (focusQuery) $("query")?.focus();
+  else if (focusHeading) $("page-title")?.focus({preventScroll: true});
 }
 
 function updateView(changes, keepContent = false) {
@@ -178,15 +181,16 @@ function openEntry(entry, trigger) {
 }
 
 function renderNavigation() {
+  $("navigation").hidden = !config?.root;
   $("navigation").replaceChildren();
+  if (!config?.root) return;
   for (const [key, [label]] of Object.entries(sections)) {
     const control = button(label, key, () => {
       if (view.section !== key) go(freshView(key), key === "search");
     }, "nav-button");
     control.setAttribute("aria-label", label);
     control.title = label;
-    if (key === view.section && config?.root) control.setAttribute("aria-current", "page");
-    control.disabled = !config?.root;
+    if (key === view.section) control.setAttribute("aria-current", "page");
     $("navigation").append(control);
   }
 }
@@ -218,7 +222,10 @@ function renderScreen() {
   const header = node("header", "page-header");
   const heading = node("div");
   const [title, description] = sections[view.section];
-  heading.append(node("h1", "", title), node("p", "", description));
+  const pageTitle = node("h1", "", title);
+  pageTitle.id = "page-title";
+  pageTitle.tabIndex = -1;
+  heading.append(pageTitle, node("p", "", description));
   const actions = node("div", "heading-actions");
   const back = button("Go back", "left", () => changeHistory(-1), "square");
   const forward = button("Go forward", "right", () => changeHistory(1), "square");
@@ -285,20 +292,34 @@ function renderOverview(screen) {
   const monitor = node("div", "monitor");
   monitor.id = "monitor";
   const rankings = node("div", "rankings");
-  for (const [key, title, description, action] of [
-    ["recent", "Recent growth", "Files that added the most space", null],
-    ["folders", "Largest folders", "One folder per branch", "folders"],
-    ["largest", "Largest files", "By space used on disk", "files"],
-  ]) {
-    const section = node("section", "rank-section");
-    const row = node("div", "section-head");
-    row.append(node("h2", "", title));
-    if (action) row.append(button("Browse " + action, null, () => go(freshView(action)), "quiet-link"));
-    const results = node("div");
-    results.id = key + "-ranking";
-    section.append(row, node("p", "rank-help", description), results);
-    rankings.append(section);
+  const recent = node("section", "rank-section");
+  const recentHead = node("div", "section-head");
+  recentHead.append(node("h2", "", "Recent growth"));
+  const recentResults = node("div");
+  recentResults.id = "recent-ranking";
+  recent.append(recentHead, node("p", "rank-help", "Files that added the most space"), recentResults);
+  const largest = node("section", "rank-section");
+  const largestHead = node("div", "section-head");
+  const groups = node("div", "range");
+  groups.setAttribute("role", "group");
+  groups.setAttribute("aria-label", "Largest items by kind");
+  const types = [["folders", "Folders"], ["largest", "Files"]];
+  for (const [key, name] of types) {
+    const control = button(name, null, () => {
+      largestGroup = key;
+      groups.querySelectorAll("button").forEach((value) => value.setAttribute("aria-pressed", String(value === control)));
+      renderLargest();
+    }, "");
+    control.setAttribute("aria-pressed", String(largestGroup === key));
+    groups.append(control);
   }
+  largestHead.append(node("h2", "", "Largest items"), groups);
+  const largestResults = node("div");
+  largestResults.id = "largest-ranking";
+  const browse = button("Browse folders", null, () => go(freshView(largestGroup === "folders" ? "folders" : "files")), "quiet-link");
+  browse.id = "browse-largest";
+  largest.append(largestHead, largestResults, browse);
+  rankings.append(recent, largest);
   screen.append(top, monitor, rankings);
   renderStatus();
 }
@@ -330,14 +351,17 @@ function renderStatus() {
   }
   if ($("capacity") && root) {
     const label = node("div", "drive-name");
-    label.append(icon("storage"), pathLabel(root, "path"));
+    const drive = root.match(/^[A-Z]:/i)?.[0];
+    const source = drive && config.drive.toUpperCase().startsWith(drive.toUpperCase())
+      ? "Windows drive (" + drive + ")" : (drive ? drive + " drive" : "Volume capacity");
+    label.append(icon("storage"), node("span", "", source));
     if (capacity) {
       const count = node("p", "free-number number");
       count.append(node("strong", "", formatBytes(capacity.free)), node("span", "", "free"));
       $("capacity").replaceChildren(label, count, meter(capacity),
         node("p", "capacity-info", formatBytes(capacity.total - capacity.free) + " used of " + formatBytes(capacity.total)));
     } else {
-      $("capacity").replaceChildren(label, node("p", "muted", "Disk capacity unavailable"));
+      $("capacity").replaceChildren(label, node("p", "muted", status.phase === "starting" ? "Checking disk space…" : "Disk capacity unavailable"));
     }
   }
   const monitor = $("monitor");
@@ -416,8 +440,7 @@ function entryName(entry, includePath) {
   return name;
 }
 
-function rank(key, entries) {
-  const container = $(key + "-ranking");
+function rank(container, key, entries) {
   if (!entries?.length) {
     const messages = {
       recent: "No file growth recorded in this period.",
@@ -432,15 +455,21 @@ function rank(key, entries) {
     const control = node("button", "rank-button");
     control.type = "button";
     control.dataset.entry = entry.id;
-    const size = entry.growth > 0 ? "+" + formatBytes(entry.growth, entry.estimated) : formatBytes(entry.allocated, entry.estimated);
+    const growth = key === "recent" && entry.growth > 0;
+    const size = growth ? (entry.estimated ? "≈ " : "") + "+" + formatBytes(entry.growth) : formatBytes(entry.allocated, entry.estimated);
     control.append(icon(entry.folder ? "folders" : "file"), entryName(entry, true),
-      node("span", "rank-value number" + (entry.growth > 0 ? " growth" : ""), size), icon("right"));
+      node("span", "rank-value number" + (growth ? " growth" : ""), size), icon("right"));
     control.addEventListener("click", () => openEntry(entry, control));
     const item = node("li");
     item.append(control);
     list.append(item);
   }
   replaceResults(container, list);
+}
+
+function renderLargest() {
+  rank($("largest-ranking"), largestGroup, loaded?.storage?.[largestGroup]);
+  $("browse-largest").querySelector("span").textContent = largestGroup === "folders" ? "Browse folders" : "Browse files";
 }
 
 function renderBrowser(screen) {
@@ -515,6 +544,7 @@ function renderFolderPath(folder) {
   } else {
     container.replaceChildren(up, icon("storage"), pathLabel(folderPath));
   }
+  if (folder?.id != null) container.append(button("Show in Explorer", "pin", () => send("reveal", {id: folder.id})));
 }
 
 function replaceResults(container, next) {
@@ -529,7 +559,8 @@ function renderResults() {
   if (!config?.root) return;
   if (view.section === "storage") {
     renderChart(loaded?.storage?.history);
-    for (const key of ["recent", "folders", "largest"]) rank(key, loaded?.storage?.[key]);
+    rank($("recent-ranking"), "recent", loaded?.storage?.recent);
+    renderLargest();
     return;
   }
   const target = $("browser-results");
@@ -762,7 +793,7 @@ window.SpaceTrail = {
           view = freshView("storage");
           stack = [view];
           position = 0;
-          if (config.root) showView();
+          if (config.root) showView(false, false);
           else renderScreen();
         }
         break;
@@ -804,3 +835,4 @@ window.SpaceTrail = {
 
 renderScreen();
 send("ready");
+})();

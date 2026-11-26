@@ -21,6 +21,7 @@ VIAddVersionKey "LegalCopyright" "SpaceTrail contributors"
 
 !define MUI_ICON "..\assets\spacetrail.ico"
 !define MUI_UNICON "..\assets\spacetrail.ico"
+!define MUI_WELCOMEFINISHPAGE_BITMAP "welcome.bmp"
 !define MUI_ABORTWARNING
 !define MUI_WELCOMEPAGE_TITLE "Install SpaceTrail"
 !define MUI_WELCOMEPAGE_TEXT "SpaceTrail shows what is using space on your PC and keeps the results up to date.$\r$\n$\r$\nSetup installs SpaceTrail for your Windows account and adds it to the Start menu."
