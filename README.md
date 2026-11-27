@@ -1,26 +1,50 @@
 <div align="center">
-  <img src="Packaging/SpaceTrail.png" alt="SpaceTrail app icon" width="112" height="112">
+  <img src="Packaging/SpaceTrail.png" alt="SpaceTrail app icon" width="104" height="104">
   <h1>SpaceTrail</h1>
-  <p><strong>See what takes up space on your Mac.</strong></p>
-  <p>Browse files, folders, and storage history from an index that updates in the background.</p>
-  <p><code>macOS 14+</code> · <code>Swift 6</code> · <code>SwiftUI</code> · <code>SQLite</code></p>
-  <p><a href="https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.1">Windows Setup</a> · <a href="#quick-start">Quick Start</a> · <a href="#features">Features</a> · <a href="#architecture">Architecture</a></p>
+  <p><strong>See what takes up space the moment you open SpaceTrail.</strong></p>
+  <p>Find large files, explore folders, and see what grew. A local index stays current in the background.</p>
+  <p><code>macOS 14+</code> · <code>Windows 11</code></p>
+  <p><a href="https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.4.0">Download for Windows</a> · <a href="#macos">Build for macOS</a> · <a href="#see-it-in-action">Watch the demos</a></p>
 </div>
+
+## See It in Action
+
+Open **Storage** to see recent growth. **Find Large Files** opens Files with a 100 MB minimum, and Search lets you combine size, format, and name.
+
+<img src="docs/media/macos-storage.gif" alt="SpaceTrail on macOS shows a growing video in Storage, filters Files to 100 MB and up, and finds one video by name and format" width="1088">
+
+<details>
+<summary>Watch the Windows walkthrough</summary>
+
+<img src="docs/media/windows-storage.gif" alt="SpaceTrail on Windows opens large files from Storage and narrows the results by name" width="1000">
+
+</details>
+
+The demos use sample files and storage history.
 
 ## Features
 
 | View | What you can do |
 | --- | --- |
-| **Files** | Filter by file format and sort indexed files by disk usage, name, logical size, or modification date. |
+| **Files** | Filter by format and minimum space used on disk, then sort by disk usage, name, logical size, or modification date. |
 | **Folders** | Browse folders and see how much space their contents and subfolders use. |
-| **Search** | Find files and folders by name, filter by a preset or custom extension, and use typo tolerance and previews. |
-| **Map** | Explore disk usage in an interactive treemap. Warm colors highlight larger items, and large tiles show the main subfolders. |
+| **Search** | Find indexed files and folders by name. Combine a file type, a minimum size, and a name for more focused results. |
+| **Map** | Explore disk usage in an interactive treemap. Open a folder to see which items account for its size. |
 | **Storage** | See disk capacity, usage history, and which files have added the most space recently. |
 
-Files, Folders, and Search offer list, compact, and grid views. From the Map context menu, you can open a folder in Finder or move eligible personal items to the Trash. SpaceTrail verifies an item’s identity before removing it and asks for confirmation before deleting files or links permanently. System paths, standard home folders, and app bundles are protected.
+The size filter uses **On Disk**. A sparse file can have a large logical size and use very little storage.
 
 <details>
-<summary>Keyboard shortcuts and previews</summary>
+<summary>See the macOS disk map</summary>
+
+<img src="docs/media/macos-map.png" alt="A nested treemap of a sample workspace, with the largest videos and project archives shown as warm-colored tiles" width="896">
+
+</details>
+
+On macOS, Files, Folders, and Search offer list, compact, and grid views. Search supports custom extensions and similar names. The Map context menu can show a folder in Finder or move eligible personal items to the Trash. SpaceTrail verifies an item’s identity before removal and asks for confirmation before permanent deletion. System paths, standard home folders, and app bundles are protected.
+
+<details>
+<summary>macOS shortcuts and previews</summary>
 
 | Shortcut | Action |
 | --- | --- |
@@ -38,7 +62,13 @@ The window also handles side buttons mapped to **⌘[** and **⌘]** by a mouse 
 
 ## Quick Start
 
-[Download SpaceTrail Setup for Windows](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.1) or see the [Windows documentation](windows/README.md).
+### Windows
+
+Run the installer for your Windows 11 PC. Setup updates an existing installation and preserves its index and sign-in choice. [Download for Intel or AMD](https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.4.0/SpaceTrail-Setup-x64.exe) · [Download for Arm](https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.4.0/SpaceTrail-Setup-arm64.exe) · [Windows guide](windows/README.md)
+
+SpaceTrail indexes accessible fixed drives and shows their status during the first scan. Choose **Open at Sign-in** during setup to open the window automatically, or change the choice later in **Settings → Startup**.
+
+### macOS
 
 You’ll need **macOS 14 or later** and **Swift 6** from Xcode 16 or a compatible toolchain. Build and launch SpaceTrail from the repository root.
 
@@ -59,25 +89,26 @@ If macOS refuses to start the background helper from a build folder inside Docum
 
 ```mermaid
 flowchart LR
-    Disk["Files and folders"] -->|"First scan"| Broker["SpaceTrail Broker"]
-    Disk -->|"Changes via FSEvents"| Broker
-    Broker -->|"Updates and checkpoints"| Index[("SQLite index")]
-    Index -->|"Reads"| App["SwiftUI dashboard"]
+    Disk["Files and folders"] -->|"First scan"| Broker["Background broker"]
+    Disk -->|"File changes"| Broker
+    Broker -->|"Incremental updates"| Index[("Local SQLite index")]
+    Index -->|"Reads"| App["Desktop app"]
 ```
 
-- **Resumable scans.** The broker saves index changes and checkpoints in batches. It uses FSEvents to update affected paths and checks folders on a rotating schedule.
-- **Local search.** The filename index powers paginated results. The broker measures disk usage in the background. You can browse the last saved index while updates resume.
-- **Compact paths.** Each directory path is stored once. Its children store a directory reference and a name. Existing indexes are migrated from saved metadata when the Mac is plugged in and enough temporary space is available. The saved index remains readable while the replacement is built.
-- **APFS measurements.** Logical size is the length of a file. **On Disk** shows its allocated size or the estimated size of a folder, accounting for hard links and whole-file APFS clones. **≈** marks an estimate and **≥** marks a measured minimum. Shared blocks and snapshots affect how much space a deletion frees.
-- **Recent file growth.** The broker logs net allocation changes in a bounded rolling history, using the existing index and file events. Storage ranks files still on disk over the selected period. File-level tracking starts with the first run of a compatible broker. Shared blocks can affect the reported sizes.
-- **Local data.** SpaceTrail indexes the startup disk and stores the index and history in `~/Library/Application Support/SpaceTrail`. macOS permissions determine which protected folders it can access.
+- **macOS** uses Swift and SwiftUI with FSEvents. The broker stores checkpoints while scanning the startup disk, measures APFS folder usage, and checks folders on a rotating schedule.
+- **Windows** uses Rust and WebView2. The broker observes directory changes, updates each drive’s index, and reconciles folders in batches after downtime.
+- **Both** store file metadata in SQLite, reuse directory references, and query the saved index while the broker records changes. Recent File Growth ranks files still present by net allocation added in the selected period.
+
+On macOS the index lives in `~/Library/Application Support/SpaceTrail`. On Windows it lives in `%LOCALAPPDATA%\SpaceTrail`. The **≈** marker indicates an estimate and **≥** indicates a measured minimum. Shared storage affects how much space a deletion frees.
 
 ## Tests
 
-With Python 3 installed, run the broker suite after building the app.
+After building for macOS, run the broker suite with Python 3.
 
 ```sh
 python3 Scripts/test-broker.py
 ```
 
-The suite uses temporary directories to verify scanning, search, FSEvents updates, scan resumption, index migration, and APFS clone accounting.
+It checks scanning, search, FSEvents updates, scan resumption, index migration, and APFS clone accounting using temporary directories.
+
+Run the Rust index and watcher tests with `cargo test --locked --manifest-path windows/Cargo.toml`. The installer workflow tests fresh setup, in-place updates, sign-in preferences, and desktop filtering on x64 and Arm64. [Windows build and test workflow](.github/workflows/windows.yml)
