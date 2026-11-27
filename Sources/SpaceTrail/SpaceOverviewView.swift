@@ -107,15 +107,25 @@ struct SpaceOverviewView: View {
 
     private func recentGrowth(_ growth: RecentGrowth?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Recent File Growth")
-                .font(.headline)
-                .accessibilityAddTraits(.isHeader)
+            HStack {
+                Text("Recent Growth").font(.headline).accessibilityAddTraits(.isHeader)
+                Spacer()
+                Picker("Group Recent Growth By", selection: $model.groupsRecentGrowthByFolder) {
+                    Text("Files").tag(false)
+                    Text("Folders").tag(true)
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+                .controlSize(.small)
+            }
             if model.loadedGrowthDays != model.storageDays || growth == nil {
                 ProgressView().controlSize(.small)
-                    .accessibilityLabel("Loading Recent File Growth")
+                    .accessibilityLabel("Loading Recent Growth")
             } else if let growth, let since = growth.since {
-                let files = growth.files.filter { !model.hidesRemovedEntry($0.entry) }
-                Text("By net increase in allocated size. Files may share disk space.")
+                Text(model.groupsRecentGrowthByFolder
+                     ? "Growth from files in each folder. Subfolders are listed separately."
+                     : "By net increase in allocated size. Files may share disk space.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if since > Date.now.addingTimeInterval(-Double(model.storageDays) * 86_400) {
@@ -123,18 +133,7 @@ struct SpaceOverviewView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
-                if files.isEmpty {
-                    Text("No files with recorded growth in this period.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    VStack(spacing: 0) {
-                        ForEach(files) { change in
-                            Divider()
-                            growthRow(change)
-                        }
-                    }
-                }
+                growthList(growth)
             } else {
                 Text("File growth will appear here as automatic updates record changes.")
                     .font(.callout)
@@ -144,19 +143,51 @@ struct SpaceOverviewView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private func growthRow(_ change: FileGrowth) -> some View {
-        let entry = change.entry
-        let size = StorageStyle.size(change.bytes)
+    @ViewBuilder
+    private func growthList(_ growth: RecentGrowth) -> some View {
+        let folders = growth.folders.filter { !model.hidesRemovedEntry($0.entry) }
+        let files = growth.files.filter { !model.hidesRemovedEntry($0.entry) }
+        if model.groupsRecentGrowthByFolder ? folders.isEmpty : files.isEmpty {
+            Text("No growth recorded in this period.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        } else {
+            VStack(spacing: 0) {
+                if model.groupsRecentGrowthByFolder {
+                    ForEach(folders) { change in
+                        Divider()
+                        growthRow(change.entry, bytes: change.bytes, detail: change.fileCount == 1
+                                  ? "1 file grew" : "\(StorageStyle.count(change.fileCount)) files grew")
+                    }
+                } else {
+                    ForEach(files) { change in
+                        Divider()
+                        growthRow(change.entry, bytes: change.bytes,
+                                  detail: change.observed.formatted(StorageStyle.dateAndTime))
+                            .contextMenu {
+                                if change.entry.parent != nil {
+                                    Button("Open Containing Folder") { model.openContainingFolder(of: change.entry) }
+                                }
+                            }
+                    }
+                }
+            }
+        }
+    }
+
+    private func growthRow(_ entry: StorageEntry, bytes: Int64, detail: String) -> some View {
+        let size = StorageStyle.size(bytes)
+        let action = entry.isFolder ? "Open in Folders" : "Show in Finder"
         return Button {
-            model.reveal([entry])
+            model.activate(entry)
         } label: {
             HStack(spacing: 9) {
-                Image(systemName: "doc")
+                Image(systemName: entry.isFolder ? "folder" : "doc")
                     .foregroundStyle(.secondary)
                     .frame(width: 16)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.name)
+                    Text(entry.id.path == entry.id.tree.root ? model.volumeName : entry.name)
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
                     if let parent = entry.parent {
@@ -172,12 +203,12 @@ struct SpaceOverviewView: View {
                     Text("+\(size)")
                         .font(.callout.weight(.semibold).monospacedDigit())
                         .accessibilityLabel("\(size) added")
-                    Text(change.observed.formatted(StorageStyle.dateAndTime))
+                    Text(detail)
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
                 .fixedSize()
-                Image(systemName: "arrow.up.right")
+                Image(systemName: entry.isFolder ? "chevron.right" : "arrow.up.right")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
@@ -186,8 +217,8 @@ struct SpaceOverviewView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Show in Finder")
-        .accessibilityHint("Shows the file in Finder")
+        .help(action)
+        .accessibilityHint(action)
     }
 
     private func ranking(_ title: String, entries: [StorageEntry]?, folders: Bool) -> some View {

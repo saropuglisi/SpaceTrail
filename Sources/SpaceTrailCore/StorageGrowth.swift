@@ -88,34 +88,59 @@ final class StorageGrowthIndex {
     static func read(from db: SQLiteConnection, schema: IndexSchema, days: Int) throws -> RecentGrowth {
         let metadata = try db.text("SELECT value FROM meta WHERE key = ?", [.text(startKey)])
         guard let raw = metadata.flatMap(Double.init) else {
-            return RecentGrowth(since: nil, files: [])
+            return RecentGrowth(since: nil, files: [], folders: [])
         }
         let trimmed = try db.text("SELECT value FROM meta WHERE key = ?", [.text(trimmedKey)]).flatMap(Double.init) ?? 0
         let since = max(raw, trimmed)
         let cutoff = bucket(Date().timeIntervalSince1970) - Int64(days) * 86_400
         var files: [FileGrowth] = []
+        var folders: [FolderGrowth] = []
+        let sameFolder: String
+        switch schema {
+        case .fullPaths: sameFolder = "f.path = totals.parent"
+        case .compactParents: sameFolder = "f.path = (SELECT path FROM parent_paths WHERE id = totals.parent)"
+        case .directoryReferences: sameFolder = "f.directory = totals.parent"
+        }
         // Start with the bounded growth history. Joining entries first can scan
         // the entire file index on versions of SQLite that choose footprint_inode.
         try db.query("""
             WITH changes AS (
                 SELECT inode, created, MAX(bucket) AS latest, SUM(delta) AS growth
                 FROM storage_growth WHERE bucket >= ? GROUP BY inode, created HAVING SUM(delta) > 0
-            ), largest AS (
-                SELECT e.rowid AS entry_id, c.growth, g.observed
+            ), matched AS MATERIALIZED (
+                SELECT e.rowid AS entry_id, e.parent, c.growth, g.observed
                 FROM changes c CROSS JOIN storage_growth g
                     ON g.inode = c.inode AND g.created = c.created AND g.bucket = c.latest
                 CROSS JOIN entries e NOT INDEXED ON e.rowid = g.entry_id AND e.tree = 0 AND e.kind = 0
                     AND e.inode = c.inode AND e.created = c.created AND e.links = 1
-                ORDER BY c.growth DESC, g.observed DESC, e.rowid DESC LIMIT 8
+            ), largest_files AS (
+                SELECT entry_id, growth, observed, 0 AS file_count FROM matched
+                ORDER BY growth DESC, observed DESC, entry_id DESC LIMIT 8
+            ), totals AS (
+                SELECT parent, SUM(growth) AS growth, MAX(observed) AS observed, COUNT(*) AS file_count
+                FROM matched WHERE parent IS NOT NULL GROUP BY parent
+            ), largest_folders AS (
+                SELECT f.rowid AS entry_id, totals.growth, totals.observed, totals.file_count
+                FROM totals CROSS JOIN entries f ON f.tree = 0 AND f.kind = 1 AND \(sameFolder)
+                ORDER BY totals.growth DESC, totals.observed DESC, f.rowid DESC LIMIT 8
+            ), ranked AS (
+                SELECT * FROM largest_files UNION ALL SELECT * FROM largest_folders
             )
-            SELECT \(schema.columns()), l.growth, l.observed
-            FROM largest l JOIN entries e ON e.rowid = l.entry_id
-            ORDER BY l.growth DESC, l.observed DESC, e.rowid DESC
-            """, [.int(cutoff)]) {
-                files.append(FileGrowth(entry: indexEntry($0), bytes: sqlInt($0, 15),
-                                        observed: Date(timeIntervalSince1970: sqlReal($0, 16))))
+            SELECT \(schema.columns()), r.growth, r.observed, r.file_count
+            FROM ranked r JOIN entries e ON e.rowid = r.entry_id
+            ORDER BY r.growth DESC, r.observed DESC, e.rowid DESC
+            """, [.int(cutoff)]) { row in
+                let entry = indexEntry(row)
+                let bytes = sqlInt(row, 15)
+                let count = sqlInt(row, 17)
+                if count > 0 {
+                    folders.append(FolderGrowth(entry: entry, bytes: bytes, fileCount: count))
+                } else {
+                    files.append(FileGrowth(entry: entry, bytes: bytes,
+                                            observed: Date(timeIntervalSince1970: sqlReal(row, 16))))
+                }
             }
-        return RecentGrowth(since: Date(timeIntervalSince1970: since), files: files)
+        return RecentGrowth(since: Date(timeIntervalSince1970: since), files: files, folders: folders)
     }
 
     private static func bucket(_ time: Double) -> Int64 {

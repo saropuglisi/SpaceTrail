@@ -204,6 +204,7 @@ pub(crate) fn revision(db: &Connection) -> Result<()> {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Entry {
     pub id: i64,
+    pub parent: Option<i64>,
     pub name: String,
     #[serde(serialize_with = "serialize_path")]
     pub path: PathBuf,
@@ -281,11 +282,19 @@ pub struct Sample {
 }
 
 #[derive(Debug, Serialize)]
+pub struct FolderGrowth {
+    #[serde(flatten)]
+    pub entry: Entry,
+    pub growing_files: i64,
+}
+
+#[derive(Debug, Serialize)]
 pub struct Storage {
     pub history: Vec<Sample>,
     pub largest: Vec<Entry>,
     pub folders: Vec<Entry>,
     pub recent: Vec<Entry>,
+    pub recent_folders: Vec<FolderGrowth>,
 }
 
 pub struct Reader {
@@ -407,7 +416,7 @@ impl Reader {
                 SELECT e.* FROM {from} WHERE {predicate} ORDER BY e.{order} {direction},e.id {direction} LIMIT ? OFFSET ?
              )
              SELECT c.id,c.name,c.directory,c.logical,c.allocated,c.files,c.estimates,c.modified,
-                    p.directory,0
+                    p.directory,0,c.parent
              FROM chosen c LEFT JOIN entries p ON p.id=c.parent ORDER BY c.{order} {direction},c.id {direction}"
         );
         let mut stmt = self.db.prepare(&sql)?;
@@ -457,7 +466,7 @@ impl Reader {
         if let Some(root) = root {
             let mut stmt = self.db.prepare(
                 "SELECT e.id,e.name,e.directory,e.logical,e.allocated,e.files,e.estimates,e.modified,
-                        NULL,0 FROM entries e WHERE e.directory IS NOT NULL AND e.parent IS NOT NULL
+                        NULL,0,e.parent FROM entries e WHERE e.directory IS NOT NULL AND e.parent IS NOT NULL
                         AND e.allocated>0 ORDER BY e.allocated DESC,e.id DESC LIMIT 4096"
             )?;
             let mut rows = stmt.query_map([], read_entry)?;
@@ -479,22 +488,46 @@ impl Reader {
         let mut args = vec![since.into()];
         self.hide_system_fields(&mut conditions, &mut args)?;
         let predicate = conditions.join(" AND ");
-        let recent = self.db.prepare(&format!(
-            "WITH changes AS MATERIALIZED (
+        let mut recent = Vec::new();
+        let mut recent_folders = Vec::new();
+        let mut growth = self.db.prepare(&format!(
+            "WITH changes AS (
                 SELECT entry,sum(bytes) AS delta FROM growth WHERE hour>=? GROUP BY entry HAVING sum(bytes)>0
-             ), ranked AS MATERIALIZED (
-                SELECT e.*,c.delta FROM changes c CROSS JOIN entries e NOT INDEXED ON e.id=c.entry
-                WHERE {predicate} ORDER BY c.delta DESC,e.id DESC LIMIT 8
+             ), matched AS MATERIALIZED (
+                SELECT e.id,e.parent,c.delta,e.estimates AS estimate
+                FROM changes c CROSS JOIN entries e NOT INDEXED ON e.id=c.entry
+                WHERE e.directory IS NULL AND {predicate}
+             ), largest_files AS (
+                SELECT id,delta,estimate,NULL AS growing_files FROM matched ORDER BY delta DESC,id DESC LIMIT 8
+             ), largest_folders AS (
+                SELECT parent AS id,SUM(delta) AS delta,MAX(estimate) AS estimate,COUNT(*) AS growing_files
+                FROM matched GROUP BY parent ORDER BY delta DESC,id DESC LIMIT 8
+             ), ranked AS (
+                SELECT * FROM largest_files UNION ALL SELECT * FROM largest_folders
              )
-             SELECT e.id,e.name,e.directory,e.logical,e.allocated,e.files,e.estimates,e.modified,
-                    p.directory,e.delta FROM ranked e LEFT JOIN entries p ON p.id=e.parent
-             ORDER BY e.delta DESC,e.id DESC",
-        ))?.query_map(params_from_iter(args), read_entry)?.collect::<rusqlite::Result<Vec<_>>>()?;
+             SELECT e.id,e.name,e.directory,e.logical,e.allocated,e.files,r.estimate,e.modified,
+                    p.directory,r.delta,e.parent,r.growing_files
+             FROM ranked r JOIN entries e ON e.id=r.id LEFT JOIN entries p ON p.id=e.parent
+             ORDER BY r.delta DESC,e.id DESC",
+        ))?;
+        let mut rows = growth.query(params_from_iter(args))?;
+        while let Some(row) = rows.next()? {
+            let entry = read_entry(row)?;
+            if let Some(growing_files) = row.get(11)? {
+                recent_folders.push(FolderGrowth {
+                    entry,
+                    growing_files,
+                });
+            } else {
+                recent.push(entry);
+            }
+        }
         Ok(Storage {
             history,
             largest,
             folders: chosen,
             recent,
+            recent_folders,
         })
     }
 
@@ -581,6 +614,7 @@ fn read_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
     };
     Ok(Entry {
         id: row.get(0)?,
+        parent: row.get(10)?,
         name,
         path,
         folder,
@@ -593,10 +627,65 @@ fn read_entry(row: &rusqlite::Row<'_>) -> rusqlite::Result<Entry> {
     })
 }
 
-#[cfg(all(test, windows))]
+#[cfg(test)]
 mod tests {
     use super::*;
 
+    #[test]
+    fn folder_growth_counts_all_growing_files_in_each_direct_folder() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch(SCHEMA).unwrap();
+        db.execute_batch(
+            "INSERT INTO state(id,root) VALUES(1,'workspace');
+             INSERT INTO entries(id,parent,name,name_key,directory) VALUES
+                (1,NULL,'workspace','workspace','workspace'),
+                (2,1,'Studio','studio','workspace/Studio'),
+                (3,2,'Exports','exports','workspace/Studio/Exports');",
+        )
+        .unwrap();
+        let hour = now() / 3_600 * 3_600;
+        for id in 4..14 {
+            let name = format!("capture-{id}");
+            db.execute(
+                "INSERT INTO entries(id,parent,name,name_key) VALUES(?1,2,?2,?2)",
+                params![id, name],
+            )
+            .unwrap();
+            db.execute(
+                "INSERT INTO growth(entry,hour,bytes) VALUES(?1,?2,1024),(?1,?2-3600,-512)",
+                params![id, hour],
+            )
+            .unwrap();
+        }
+        db.execute_batch(
+            "INSERT INTO entries(id,parent,name,name_key,estimates) VALUES
+                (14,3,'master','master',1),(15,2,'shrank','shrank',0);",
+        )
+        .unwrap();
+        db.execute(
+            "INSERT INTO growth(entry,hour,bytes) VALUES(14,?1,6144),(15,?1,-2048)",
+            [hour],
+        )
+        .unwrap();
+        let storage = Reader { db }.storage(7).unwrap();
+        assert_eq!(storage.recent.len(), 8);
+        assert_eq!(storage.recent[0].parent, Some(3));
+        let totals: Vec<_> = storage
+            .recent_folders
+            .iter()
+            .map(|folder| {
+                (
+                    folder.entry.id,
+                    folder.entry.growth,
+                    folder.growing_files,
+                    folder.entry.estimated,
+                )
+            })
+            .collect();
+        assert_eq!(totals, vec![(3, 6144, 1, true), (2, 5120, 10, false)]);
+    }
+
+    #[cfg(windows)]
     #[test]
     fn default_desktop_rankings_skip_windows_files_but_keep_neighboring_folders() {
         let db = Connection::open_in_memory().unwrap();
@@ -647,5 +736,7 @@ mod tests {
             storage.recent.iter().map(|row| row.id).collect::<Vec<_>>(),
             vec![7]
         );
+        assert_eq!(storage.recent_folders.len(), 1);
+        assert_eq!(storage.recent_folders[0].entry.id, 4);
     }
 }

@@ -295,7 +295,7 @@ public struct IndexReader: Sendable {
         }
         var files: [StorageEntry] = []
         var folders: [StorageEntry] = []
-        var growth = RecentGrowth(since: nil, files: [])
+        var growth = RecentGrowth(since: nil, files: [], folders: [])
         if includeDetails {
             let schema = try IndexSchema.read(from: db)
             var heavyFiles: [IndexedEntry] = []

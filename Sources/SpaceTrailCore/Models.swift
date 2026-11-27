@@ -159,9 +159,18 @@ public struct FileGrowth: Identifiable, Equatable, Sendable {
     public var id: EntryKey { entry.id }
 }
 
+public struct FolderGrowth: Identifiable, Equatable, Sendable {
+    public let entry: StorageEntry
+    public let bytes: Int64
+    public let fileCount: Int64
+
+    public var id: EntryKey { entry.id }
+}
+
 public struct RecentGrowth: Equatable, Sendable {
     public let since: Date?
     public let files: [FileGrowth]
+    public let folders: [FolderGrowth]
 }
 
 public struct Overview: Sendable {

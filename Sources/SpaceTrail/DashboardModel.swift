@@ -172,6 +172,7 @@ final class DashboardModel {
     private(set) var storageHistory: [StorageSample]?
     private(set) var storageOverview: Overview?
     var storageDays = 7
+    var groupsRecentGrowthByFolder = false
     private(set) var loadedGrowthDays: Int?
     private var storageRevision: String?
     var revision: String?
@@ -590,6 +591,11 @@ final class DashboardModel {
     func openFolder(_ key: EntryKey) {
         if !folderSearch.isEmpty { folderSearch = "" }
         navigate(to: .folders(key))
+    }
+
+    func openContainingFolder(of entry: StorageEntry) {
+        guard let path = entry.parent else { return }
+        openFolder(EntryKey(tree: entry.id.tree, path: path))
     }
 
     func openMap(_ key: EntryKey) { navigate(to: .map(key)) }

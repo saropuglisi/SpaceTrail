@@ -409,6 +409,9 @@ struct StorageMapView: View {
             Button("Open in Folders") { model.openFolder(item.id) }
             Button("Open in Finder") { model.openFolderInFinder(item.id) }
         } else {
+            if item.entry.parent != nil {
+                Button("Open Containing Folder") { model.openContainingFolder(of: item.entry) }
+            }
             if let url = model.previewURL(for: item.entry) { Button("Preview") { preview = url } }
             Button("Show in Finder") { model.reveal([item.entry]) }
         }

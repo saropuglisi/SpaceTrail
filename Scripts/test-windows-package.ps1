@@ -135,6 +135,34 @@ function Test-LargeFiles($Window) {
     Save-DemoFrame $Window '03-narrowed-results'
 }
 
+function Test-RecentGrowth($Window, $Folder) {
+    foreach ($Name in @('Camera originals.mov', 'Interview master.mp4')) {
+        $File = [IO.File]::Open((Join-Path $Folder $Name), 'Open', 'Write', 'ReadWrite')
+        try {
+            $File.SetLength($File.Length + 16MB)
+            $File.Flush($true)
+        } finally {
+            $File.Dispose()
+        }
+    }
+    Invoke-Control (@(Named $Window 'Storage')[0])
+    $Group = @(Wait-For { Named $Window 'Group Recent Growth By' } 'the recent growth grouping control')[0]
+    Invoke-Control (@(Named $Group 'Folders')[0])
+    $Buttons = [System.Windows.Automation.PropertyCondition]::new(
+        [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
+        [System.Windows.Automation.ControlType]::Button)
+    $Growth = Wait-For {
+        $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants, $Buttons) |
+            Where-Object { $_.Current.Name -like 'Studio*2 files grew*' } |
+            Select-Object -First 1
+    } 'growth from both files in their containing folder'
+    Save-DemoFrame $Window '04-growth-by-folder'
+    Invoke-Control $Growth
+    Wait-For { Named $Window 'Search this folder' } 'the folder opened from Recent Growth' | Out-Null
+    Wait-For { File-Row $Window 'Interview master.mp4' } 'an item in the opened Studio folder' | Out-Null
+    Save-DemoFrame $Window '05-growth-folder'
+}
+
 function Assert-Install($Version) {
     if (-not (Test-Path -LiteralPath $App)) { throw 'The application was not installed.' }
     if (-not (Test-Path -LiteralPath $Shortcut)) { throw 'The Start menu shortcut is missing.' }
@@ -154,20 +182,21 @@ function Choose-Startup($Window, $Choice) {
     Wait-For { -not (Named $Window 'Open SpaceTrail at sign-in?') } 'the sign-in prompt to close' | Out-Null
 }
 
-$OldSetup = Join-Path $env:RUNNER_TEMP "SpaceTrail-0.3.1-$Architecture.exe"
-Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.3.1/SpaceTrail-Setup-$Architecture.exe" -OutFile $OldSetup
+$OldSetup = Join-Path $env:RUNNER_TEMP "SpaceTrail-0.4.0-$Architecture.exe"
+Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.4.0/SpaceTrail-Setup-$Architecture.exe" -OutFile $OldSetup
 $ExpectedHash = if ($Architecture -eq 'x64') {
-    '85efa5228f7f782314fc48fbb2dcf9506713c769b1eb488127f8be18e6c8def8'
+    '978e9e3ea117d5d22f30bbd74cebb9521683a53fa02ce72f4ac11d23cdcf9778'
 } else {
-    'a10d164dee776580c508fdf9f2646712e16db09bf13b8b1e980a7e500a2b85ce'
+    '43bc0a008671176a452a6a97fe50a4f31f0c70a7b7e089b99d7abec59b343582'
 }
 if ((Get-FileHash -LiteralPath $OldSetup -Algorithm SHA256).Hash -ne $ExpectedHash) {
     throw 'The previous installer did not match the released checksum.'
 }
 Run-Checked $OldSetup '/S'
-Assert-Install '0.3.1'
+Assert-Install '0.4.0'
 
-New-Item -ItemType Directory -Path $Scan, $Support -Force | Out-Null
+$Studio = Join-Path $Scan 'Studio'
+New-Item -ItemType Directory -Path $Studio, $Support -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $Scan 'Field notes.pdf') -Value '%PDF-1.7'
 Set-Content -LiteralPath (Join-Path $Scan 'Project notes.txt') -Value 'A fixture for Windows Search.'
 Set-Content -LiteralPath (Join-Path $Scan 'Interview transcript.pdf') -Value '%PDF-1.7'
@@ -179,7 +208,7 @@ $LargeSamples = @{
     'Presentation.pptx' = 28MB
 }
 foreach ($Sample in $LargeSamples.GetEnumerator()) {
-    $File = [IO.File]::Create((Join-Path $Scan $Sample.Key))
+    $File = [IO.File]::Create((Join-Path $Studio $Sample.Key))
     try { $File.SetLength($Sample.Value) } finally { $File.Dispose() }
 }
 if ($env:SPACETRAIL_DEMO_FRAMES) {
@@ -191,9 +220,9 @@ $FixtureSettings = @{root = '\\?\' + $Scan} | ConvertTo-Json -Compress
 New-Item -Path $StartKey -Force | Out-Null
 Set-ItemProperty -Path $StartKey -Name 'SpaceTrail' -Value '"C:\Portable\SpaceTrail-x64.exe" --broker'
 $OldProcess = Start-Desktop $LegacyAppData
-$OldWindow = Find-Window $OldProcess 'the 0.3.1 window before updating'
+$OldWindow = Find-Window $OldProcess 'the 0.4.0 window before updating'
 Choose-Startup $OldWindow 'Not Now'
-Wait-For { Named $OldWindow 'Search by name' } 'the 0.3.1 desktop before updating' | Out-Null
+Wait-For { Named $OldWindow 'Search by name' } 'the 0.4.0 desktop before updating' | Out-Null
 Run-Checked $Setup '/S'
 $Version = [regex]::Match((Get-Content (Join-Path $Repository 'windows\Cargo.toml') -Raw), '(?m)^version = "([0-9.]+)"').Groups[1].Value
 Assert-Install $Version
@@ -210,6 +239,7 @@ try {
     $Window = Find-Window $Process 'the upgraded SpaceTrail window'
     Test-Search $Window
     Test-LargeFiles $Window
+    Test-RecentGrowth $Window $Studio
     Invoke-Control (@(Named $Window 'Settings')[0])
     Wait-For { Named $Window 'Scan all drives' } 'the previous folder scope in Settings' | Out-Null
 } catch {
@@ -218,7 +248,7 @@ try {
 } finally {
     Run-Checked $App '--shutdown'
 }
-Write-Output 'In-place update from 0.3.1, saved index search, size filtering, and background-only startup verified.'
+Write-Output 'In-place update from 0.4.0, saved index search, size filtering, folder growth, and background-only startup verified.'
 
 Run-Checked $Uninstall '/S'
 if (Startup-Entry) { throw 'Uninstall left the background sign-in entry registered.' }

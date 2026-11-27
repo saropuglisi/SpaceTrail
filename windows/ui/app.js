@@ -67,6 +67,7 @@ let status = {scope: "all_drives", drives: [], paused: false};
 let previewToken = 0;
 let previewEntry = null;
 let previewTrigger = null;
+let groupsRecentGrowthByFolder = false;
 let lastHistoryShortcut = -Infinity;
 
 function node(tag, classes, content) {
@@ -364,18 +365,42 @@ function renderOverview(screen) {
   head.append(node("h2", "", "Storage History"), controls);
   history.append(head, chart);
   const rankings = node("div", "rankings");
-  const recent = rankingSection("Recent File Growth", "Files that added the most space", "recent");
+  const groups = node("div", "range");
+  groups.setAttribute("role", "group");
+  groups.setAttribute("aria-label", "Group Recent Growth By");
+  for (const [label, byFolder] of [["Files", false], ["Folders", true]]) {
+    const control = button(label, null, () => {
+      groupsRecentGrowthByFolder = byFolder;
+      for (const peer of groups.querySelectorAll("button")) {
+        peer.setAttribute("aria-pressed", String(peer === control));
+      }
+      renderRecentGrowth();
+    }, "");
+    control.setAttribute("aria-pressed", String(groupsRecentGrowthByFolder === byFolder));
+    groups.append(control);
+  }
+  const recent = rankingSection("Recent Growth", "", "recent", groups);
   rankings.append(rankingSection("Largest Files", "By disk usage", "largest"),
     rankingSection("Folders to Explore", "One folder per branch", "folders"));
   overview.append(capacity, history, recent, rankings);
   screen.append(overview);
 }
 
-function rankingSection(title, subtitle, id) {
+function rankingSection(title, subtitle, id, actions) {
   const section = node("section", "rank-section");
+  const heading = node("h2", "", title);
+  if (actions) {
+    const header = node("div", "rank-header");
+    header.append(heading, actions);
+    section.append(header);
+  } else {
+    section.append(heading);
+  }
+  const caption = node("p", "rank-help", subtitle);
+  caption.id = id + "-caption";
   const results = node("div");
   results.id = id + "-ranking";
-  section.append(node("h2", "", title), node("p", "rank-help", subtitle), results);
+  section.append(caption, results);
   return section;
 }
 
@@ -498,7 +523,11 @@ function entryName(entry, includePath) {
   title.title = entry.name;
   name.append(title);
   if (includePath) {
-    const path = node("small", "path", parentPath(entry.path));
+    const directory = parentPath(entry.path);
+    const count = entry.growing_files;
+    const detail = count ? (count === 1 ? "1 file grew" : numbers.format(count) + " files grew") + " · " + directory
+      : directory;
+    const path = node("small", "path", detail);
     path.title = entry.path;
     name.append(path);
   }
@@ -508,7 +537,7 @@ function entryName(entry, includePath) {
 function rank(container, key, entries) {
   if (!entries?.length) {
     const messages = {
-      recent: "No file growth recorded in this period.",
+      recent: entries ? "No growth recorded in this period." : "Loading recent growth…",
       folders: "No large folders found yet.",
       largest: "No files indexed yet.",
     };
@@ -530,6 +559,14 @@ function rank(container, key, entries) {
     list.append(item);
   }
   replaceResults(container, list);
+}
+
+function renderRecentGrowth() {
+  $("recent-caption").textContent = groupsRecentGrowthByFolder
+    ? "Growth from files in each folder. Subfolders are listed separately."
+    : "Files that added the most space.";
+  const key = groupsRecentGrowthByFolder ? "recent_folders" : "recent";
+  rank($("recent-ranking"), "recent", loaded?.storage?.[key]);
 }
 
 
@@ -654,7 +691,8 @@ function renderResults() {
   if (!config) return;
   if (view.section === "storage") {
     renderChart(loaded?.storage?.history);
-    for (const kind of ["recent", "largest", "folders"]) {
+    renderRecentGrowth();
+    for (const kind of ["largest", "folders"]) {
       rank($(kind + "-ranking"), kind, loaded?.storage?.[kind]);
     }
     return;
@@ -835,6 +873,7 @@ function openPreview(entry, trigger) {
   $("preview-name").textContent = entry.name;
   $("preview-path").textContent = entry.path;
   $("preview-path").title = entry.path;
+  $("preview-folder").hidden = entry.parent == null;
   $("preview-stage").replaceChildren(node("span", "muted", "Loading preview…"));
   $("preview").showModal();
   $("close-preview").focus();
@@ -897,6 +936,12 @@ startupPrompt.addEventListener("close", () => $("main").focus({preventScroll: tr
 $("preview-reveal").addEventListener("click", () => {
   if (previewEntry) send("reveal", {drive: previewEntry.drive, id: previewEntry.id});
   $("preview").close();
+});
+$("preview-folder").addEventListener("click", () => {
+  if (previewEntry?.parent == null) return;
+  const {drive, parent} = previewEntry;
+  $("preview").close();
+  go({...freshView("folders"), drive, folder: parent});
 });
 $("preview").addEventListener("close", () => {
   if (previewTrigger?.isConnected) previewTrigger.focus({preventScroll: true});

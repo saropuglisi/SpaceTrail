@@ -4,7 +4,7 @@ use spacetrail::{
     broker,
     catalog::{Catalog, Location, Scope},
     display_path, fold_name,
-    index::{Entry, PAGE_SIZE, Reader, Request, Sample, Sort, Status},
+    index::{Entry, FolderGrowth, PAGE_SIZE, Reader, Request, Sample, Sort, Status},
     platform::Capacity,
 };
 use std::{collections::BTreeMap, path::Path};
@@ -67,6 +67,14 @@ pub(super) struct DriveStorage {
     pub largest: Vec<Item>,
     pub folders: Vec<Item>,
     pub recent: Vec<Item>,
+    recent_folders: Vec<RecentFolder>,
+}
+
+#[derive(Serialize)]
+struct RecentFolder {
+    drive: String,
+    #[serde(flatten)]
+    growth: FolderGrowth,
 }
 
 #[derive(Serialize)]
@@ -248,6 +256,12 @@ fn load_data(indexes: &[DriveIndex<'_>], view: &View) -> Result<Data> {
             storage.largest.extend(items(data.largest, id));
             storage.folders.extend(items(data.folders, id));
             storage.recent.extend(items(data.recent, id));
+            storage
+                .recent_folders
+                .extend(data.recent_folders.into_iter().map(|growth| RecentFolder {
+                    drive: id.clone(),
+                    growth,
+                }));
         }
         for list in [&mut storage.largest, &mut storage.folders] {
             list.sort_by_key(|item| std::cmp::Reverse(item.entry.allocated));
@@ -257,6 +271,10 @@ fn load_data(indexes: &[DriveIndex<'_>], view: &View) -> Result<Data> {
             .recent
             .sort_by_key(|item| std::cmp::Reverse(item.entry.growth));
         storage.recent.truncate(8);
+        storage
+            .recent_folders
+            .sort_by_key(|folder| std::cmp::Reverse(folder.growth.entry.growth));
+        storage.recent_folders.truncate(8);
         result.storage = Some(storage);
         return Ok(result);
     }
@@ -387,6 +405,7 @@ mod tests {
                     drive: (*drive).to_owned(),
                     entry: Entry {
                         id,
+                        parent: None,
                         name: "sample.bin".into(),
                         path: Path::new("sample.bin").to_owned(),
                         folder: false,

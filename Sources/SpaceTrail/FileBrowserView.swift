@@ -558,6 +558,9 @@ struct FileBrowserView: View {
     private func entryActions(_ entries: [StorageEntry]) -> some View {
         if entries.count == 1, let entry = entries.first {
             if entry.isFolder { Button("Open Folder") { model.openFolder(entry.id) } }
+            else if entry.parent != nil {
+                Button("Open Containing Folder") { model.openContainingFolder(of: entry) }
+            }
             if let url = model.previewURL(for: entry) {
                 Button("Preview") { previewURL = url }
             } else if entry.hasThumbnail, let path = entry.parent {
