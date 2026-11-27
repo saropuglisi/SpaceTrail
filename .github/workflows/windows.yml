@@ -42,10 +42,14 @@ jobs:
         shell: pwsh
         run: |
           $Nsis = "${env:ProgramFiles(x86)}\NSIS\makensis.exe"
-          if (-not (Test-Path -LiteralPath $Nsis)) {
+          for ($Attempt = 1; $Attempt -le 3 -and -not (Test-Path -LiteralPath $Nsis); $Attempt++) {
             choco install nsis --no-progress --yes
-            if ($LASTEXITCODE -ne 0) { throw 'Could not install NSIS.' }
+            if ($Attempt -lt 3 -and -not (Test-Path -LiteralPath $Nsis)) {
+              Write-Warning 'NSIS is unavailable. Retrying the download.'
+              Start-Sleep -Seconds 5
+            }
           }
+          if (-not (Test-Path -LiteralPath $Nsis)) { throw 'Could not install NSIS.' }
           ./Scripts/package-windows.ps1 -Architecture '${{ matrix.arch }}' -MakeNsis $Nsis
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
@@ -55,10 +59,9 @@ jobs:
       - name: Verify installation and desktop
         shell: powershell
         env:
-          SPACETRAIL_DEMO_FRAMES: ${{ matrix.arch == 'x64' && format('{0}/spacetrail-demo', runner.temp) || '' }}
+          SPACETRAIL_DEMO_FRAMES: ${{ runner.temp }}/spacetrail-demo
         run: ./Scripts/test-windows-package.ps1 -Architecture '${{ matrix.arch }}'
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
-        if: matrix.arch == 'x64'
         with:
-          name: SpaceTrail-Windows-demo-frames
+          name: SpaceTrail-Windows-demo-${{ matrix.arch }}-frames
           path: ${{ runner.temp }}/spacetrail-demo/*.png
