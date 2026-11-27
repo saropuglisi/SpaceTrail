@@ -147,7 +147,8 @@ function Test-RecentGrowth($Window, $Folder) {
     }
     Invoke-Control (@(Named $Window 'Storage')[0])
     $Group = @(Wait-For { Named $Window 'Group Recent Growth By' } 'the recent growth grouping control')[0]
-    Invoke-Control (@(Named $Group 'Folders')[0])
+    $FoldersOption = @(Named $Group 'Folders')[0]
+    $FoldersOption.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     $Buttons = [System.Windows.Automation.PropertyCondition]::new(
         [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
         [System.Windows.Automation.ControlType]::Button)
