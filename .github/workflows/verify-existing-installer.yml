@@ -1,0 +1,31 @@
+name: Verify packaged Windows x64 installer
+
+on:
+  push:
+    branches: ['codex/windows-installer-proof']
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  verify:
+    runs-on: windows-2025
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - name: Verify the packaged x64 installer
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SPACETRAIL_DEMO_FRAMES: ${{ runner.temp }}/spacetrail-demo
+        run: |
+          gh run download 46019352101 --name SpaceTrail-Setup-x64 --dir dist/windows
+          if ($LASTEXITCODE -ne 0) { throw 'The packaged installer could not be downloaded.' }
+          $Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath 'dist/windows/SpaceTrail-Setup-x64.exe').Hash
+          if ($Hash -ne 'F81E5F6BCA1C9A8646DF172850005A42BC1F08BFC67D85A1634904F484800C9E') { throw 'The installer checksum did not match the original build.' }
+          .\Scripts\test-windows-package.ps1 -Architecture x64
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: SpaceTrail-Windows-demo-x64-frames
+          path: ${{ runner.temp }}/spacetrail-demo/*.png
