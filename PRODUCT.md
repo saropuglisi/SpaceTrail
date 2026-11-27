@@ -20,4 +20,4 @@ SpaceTrail indexes locations it can read and keeps the index up to date during n
 
 ## Capabilities and Constraints
 
-The overview shows the largest files and folders alongside storage history. The broker applies changes incrementally and checks folders periodically in the background.
+The overview shows the largest items, storage history, and recent growth grouped by file or containing folder. The broker applies changes incrementally and checks folders periodically in the background.

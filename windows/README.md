@@ -4,7 +4,7 @@ SpaceTrail keeps a local index of your local drives, so you can explore its file
 
 ## Install the preview
 
-Download **SpaceTrail-Setup-x64.exe** for most Intel and AMD PCs or **SpaceTrail-Setup-arm64.exe** for Windows on Arm. [Windows preview release](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.4.0)
+Download **SpaceTrail-Setup-x64.exe** for most Intel and AMD PCs or **SpaceTrail-Setup-arm64.exe** for Windows on Arm. [Windows preview release](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.5.0)
 
 Run Setup on Windows 11 for a new installation or to update an existing copy. Setup closes running copies, replaces the application, and keeps your saved index and sign-in preference. SpaceTrail is available in the Start menu.
 
@@ -12,11 +12,11 @@ SpaceTrail starts scanning accessible fixed drives with drive letters automatica
 
 On first launch, choose **Open at Sign-in** to open the SpaceTrail window when you sign in to Windows, or **Not Now** to keep your current startup setting. Under **Settings → Startup**, choose whether to open SpaceTrail, index in the background, or turn startup off. The broker continues in the notification area after you close the window.
 
-- **Storage** shows capacity, history, and recent file growth. **Find Large Files** opens Files at a 100 MB minimum and keeps the selected drive.
-- **Files and Search** combine name, file type, and minimum size on disk. Preview supported files with Windows thumbnails and use **Show system files** when needed.
+- **Storage** shows capacity, history, and recent growth by file or folder. Select a growing folder to browse it. **Find Large Files** opens Files at a 100 MB minimum and keeps the selected drive.
+- **Files and Search** combine name, file type, and minimum size on disk. Preview supported files with Windows thumbnails and use **Open Containing Folder** to browse their location.
 - **Folders and Map** show the space used by subfolders and let you open locations in Explorer.
 
-<img src="../docs/media/windows-storage.gif" alt="SpaceTrail on Windows opens large files from Storage and narrows the results by name" width="1000">
+<img src="../docs/media/windows-storage.gif" alt="SpaceTrail on Windows shows two growing files grouped under Studio and opens that folder" width="1000">
 
 **On disk** shows allocated bytes. A leading **≈** marks an estimate, shared allocation, or incomplete folder coverage. Use **Show in Explorer** to manage files. SpaceTrail runs under the current user account and skips directory junctions, the Recycle Bin, and its own index.
 

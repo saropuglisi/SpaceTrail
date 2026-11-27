@@ -1,6 +1,6 @@
 # SpaceTrail
 
-SpaceTrail follows desktop file browsers on macOS and Windows. A narrow sidebar leads to Files, Folders, Search, Map, and Storage. Files opens on a sortable table. Folders keeps the same columns and adds a breadcrumb. Storage puts capacity and a time series before recent growth and the largest items. Its **Find Large Files** action opens Files with the minimum size set to 100 MB.
+SpaceTrail follows desktop file browsers on macOS and Windows. A narrow sidebar leads to Files, Folders, Search, Map, and Storage. Files opens on a sortable table. Folders keeps the same columns and adds a breadcrumb. Storage puts capacity and a time series before recent growth and the largest items. The recent growth control switches between files and their containing folders. **Find Large Files** opens Files with the minimum size set to 100 MB.
 
 Use system typography, tabular numerals, native selection and keyboard focus, and an indigo accent for storage measurements. Use system surfaces and separators with support for both appearances. Keep help near the affected value or action. The window shrinks to a compact table and a vertically stacked overview.
 
