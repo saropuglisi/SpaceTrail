@@ -24,8 +24,8 @@ function Run-Checked($File, $Arguments) {
 
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 
-function Wait-For($Condition, $Description) {
-    $Deadline = [DateTime]::UtcNow.AddSeconds(25)
+function Wait-For($Condition, $Description, [int]$TimeoutSeconds = 25) {
+    $Deadline = [DateTime]::UtcNow.AddSeconds($TimeoutSeconds)
     do {
         $Result = & $Condition
         if ($Result) { return $Result }
@@ -54,14 +54,14 @@ function Start-Desktop($AppData) {
     }
 }
 
-function Find-Window($Process) {
+function Find-Window($Process, $Description) {
     Wait-For {
         $Process.Refresh()
         if ($Process.HasExited) { throw "Desktop exited with code $($Process.ExitCode)." }
         if ($Process.MainWindowHandle -ne [IntPtr]::Zero) {
             [System.Windows.Automation.AutomationElement]::FromHandle($Process.MainWindowHandle)
         }
-    } 'the installed SpaceTrail window'
+    } "$Description (process $($Process.Id))" 50
 }
 
 function Show-Window-Diagnostics($Window) {
@@ -191,7 +191,7 @@ $FixtureSettings = @{root = '\\?\' + $Scan} | ConvertTo-Json -Compress
 New-Item -Path $StartKey -Force | Out-Null
 Set-ItemProperty -Path $StartKey -Name 'SpaceTrail' -Value '"C:\Portable\SpaceTrail-x64.exe" --broker'
 $OldProcess = Start-Desktop $LegacyAppData
-$OldWindow = Find-Window $OldProcess
+$OldWindow = Find-Window $OldProcess 'the 0.3.1 window before updating'
 Choose-Startup $OldWindow 'Not Now'
 Wait-For { Named $OldWindow 'Search by name' } 'the 0.3.1 desktop before updating' | Out-Null
 Run-Checked $Setup '/S'
@@ -207,7 +207,7 @@ if ((Startup-Entry) -ne $BackgroundEntry) {
 $Window = $null
 try {
     $Process = Start-Desktop $LegacyAppData
-    $Window = Find-Window $Process
+    $Window = Find-Window $Process 'the upgraded SpaceTrail window'
     Test-Search $Window
     Test-LargeFiles $Window
     Invoke-Control (@(Named $Window 'Settings')[0])
@@ -229,7 +229,7 @@ if (Startup-Entry) { throw 'A fresh install registered startup before the user a
 $Window = $null
 try {
     $Process = Start-Desktop $NewAppData
-    $Window = Find-Window $Process
+    $Window = Find-Window $Process 'the fresh SpaceTrail window'
     Choose-Startup $Window 'Open at Sign-in'
     if ((Startup-Entry) -ne $WindowEntry) { throw 'Opting in did not register the desktop window for sign-in.' }
     Wait-For { Named $Window 'First Scan' } 'the automatic first scan' | Out-Null
@@ -257,7 +257,7 @@ if ((Startup-Entry) -ne $WindowEntry) { throw 'Setup changed the existing window
 $Window = $null
 try {
     $Process = Start-Desktop $NewAppData
-    $Window = Find-Window $Process
+    $Window = Find-Window $Process 'the SpaceTrail window after opting in'
     Wait-For { Named $Window 'Search by name' } 'the desktop after opting in' | Out-Null
     Invoke-Control (@(Named $Window 'Settings')[0])
     Wait-For { Named $Window 'When I sign in' } 'the startup setting after relaunch' | Out-Null
