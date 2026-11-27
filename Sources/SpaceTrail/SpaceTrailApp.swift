@@ -56,16 +56,19 @@ struct SpaceTrailApp: App {
     @NSApplicationDelegateAdaptor(AppLifecycle.self) private var lifecycle
     @AppStorage("showsMenuBarIcon") private var showsMenuBarIcon = true
     @State private var model = DashboardModel()
+    @State private var loginLaunch = LoginLaunch()
 
     var body: some Scene {
         Window("SpaceTrail", id: "main") {
-            MainWindow(model: model, lifecycle: lifecycle, showsMenuBarIcon: showsMenuBarIcon)
+            MainWindow(model: model, lifecycle: lifecycle, loginLaunch: loginLaunch,
+                       showsMenuBarIcon: showsMenuBarIcon)
         }
         .defaultSize(width: 1_100, height: 720)
         .windowResizability(.contentMinSize)
 
         Settings {
-            SettingsView(model: model, showsMenuBarIcon: Binding(get: { showsMenuBarIcon }, set: { visible in
+            SettingsView(model: model, loginLaunch: loginLaunch,
+                         showsMenuBarIcon: Binding(get: { showsMenuBarIcon }, set: { visible in
                 showsMenuBarIcon = visible
                 lifecycle.setMenuBarVisible(visible)
             }))
@@ -78,7 +81,9 @@ private struct MainWindow: View {
     @Environment(\.openWindow) private var openWindow
     let model: DashboardModel
     let lifecycle: AppLifecycle
+    let loginLaunch: LoginLaunch
     let showsMenuBarIcon: Bool
+    @State private var showingLoginPrompt = false
 
     var body: some View {
         Group {
@@ -89,6 +94,16 @@ private struct MainWindow: View {
         .environment(\.locale, StorageStyle.locale)
         .onAppear {
             lifecycle.prepare(model: model, openWindow: openWindow, showsMenuBarIcon: showsMenuBarIcon)
+        }
+        .onChange(of: model.diskAccess, initial: true) { _, access in
+            loginLaunch.refresh()
+            if access != nil && loginLaunch.shouldOffer { showingLoginPrompt = true }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginLaunch.refresh()
+        }
+        .sheet(isPresented: $showingLoginPrompt) {
+            LoginLaunchPrompt(launch: loginLaunch)
         }
     }
 }

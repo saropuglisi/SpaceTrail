@@ -31,6 +31,15 @@
       </main>
     </div>
   </div>
+  <dialog id="startup-prompt" aria-labelledby="startup-title" aria-describedby="startup-description">
+    <h2 id="startup-title">Open SpaceTrail at sign-in?</h2>
+    <p id="startup-description">Have your storage overview ready when you sign in to Windows. You can change this in Settings.</p>
+    <p id="startup-prompt-error" class="startup-error" role="alert"></p>
+    <div class="dialog-actions">
+      <button type="button" class="button" id="skip-startup" autofocus>Not Now</button>
+      <button type="button" class="button primary" id="enable-startup">Open at Sign-in</button>
+    </div>
+  </dialog>
   <dialog id="settings" aria-labelledby="settings-title">
     <div class="dialog-title"><h2 id="settings-title">Settings</h2><button type="button" class="square" id="close-settings" aria-label="Close settings"></button></div>
     <section class="setting">
@@ -41,8 +50,17 @@
       <button type="button" id="change-location" class="button">Choose a folder…</button>
     </section>
     <section class="setting">
-      <label class="check"><input type="checkbox" id="startup-setting"> Start background updates at sign-in</label>
-      <p>SpaceTrail keeps the index up to date after you close the window.</p>
+      <h3>Startup</h3>
+      <label class="startup-setting" for="startup-setting">
+        <span>When I sign in</span>
+        <select id="startup-setting" aria-describedby="startup-setting-description">
+          <option value="off">Off</option>
+          <option value="background">Index in the background</option>
+          <option value="open">Open SpaceTrail</option>
+        </select>
+      </label>
+      <p id="startup-settings-error" class="startup-error" role="alert"></p>
+      <p id="startup-setting-description">SpaceTrail keeps the index up to date after you close the window.</p>
     </section>
   </dialog>
   <dialog id="preview" aria-labelledby="preview-title">

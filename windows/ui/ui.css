@@ -251,6 +251,13 @@ dialog::backdrop { background: rgb(0 0 0 / .58); }
 .setting { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
 .setting p { color: var(--muted); font-size: 13px; margin: 4px 0 8px; }
 .setting .button + .button { margin-left: 6px; }
+#startup-prompt { padding: 22px; }
+#startup-title { font-size: 20px; letter-spacing: -.2px; }
+#startup-description { margin-top: 8px; color: var(--muted); }
+.dialog-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+.startup-setting { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; margin: 8px 0; }
+.startup-error:empty { display: none; }
+dialog p.startup-error { margin-top: 8px; font-size: 13px; color: var(--alert-text); }
 .preview-name { font-weight: 620; overflow-wrap: anywhere; }
 #preview-path { margin-top: 2px; font-size: 12px; }
 .preview-stage { margin: 10px 0; min-height: 140px; background: var(--canvas); border-radius: 5px; display: grid; place-items: center; }

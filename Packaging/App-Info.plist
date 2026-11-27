@@ -25,7 +25,7 @@
     <key>CFBundleShortVersionString</key>
     <string>0.1.0</string>
     <key>CFBundleVersion</key>
-    <string>23</string>
+    <string>24</string>
     <key>NSDesktopFolderUsageDescription</key>
     <string>SpaceTrail uses access to Desktop to find files, measure their sizes, and show previews.</string>
     <key>NSDocumentsFolderUsageDescription</key>

@@ -110,7 +110,6 @@ Section "SpaceTrail"
     SetErrorLevel 1
     Abort "SpaceTrail could not be updated. Close any open copies and run setup again."
   ${EndIf}
-  ReadRegStr $1 HKCU "${UNINSTALL_KEY}" "DisplayVersion"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\SpaceTrail.lnk" "$INSTDIR\SpaceTrail.exe"
   WriteRegStr HKCU "${UNINSTALL_KEY}" "DisplayName" "SpaceTrail"
@@ -122,13 +121,13 @@ Section "SpaceTrail"
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoModify" 1
   WriteRegDWORD HKCU "${UNINSTALL_KEY}" "NoRepair" 1
   ReadRegStr $0 HKCU "${STARTUP_KEY}" "SpaceTrail"
-  ${If} $0 != ""
+  StrCpy $1 $0 9 -9
+  StrCpy $2 $0 1 -1
+  ${If} $1 == " --broker"
     WriteRegStr HKCU "${STARTUP_KEY}" "SpaceTrail" '"$INSTDIR\SpaceTrail.exe" --broker'
-  ${ElseIf} $1 == ""
-    IfFileExists "$LOCALAPPDATA\SpaceTrail\settings.json" startup_ready
-    WriteRegStr HKCU "${STARTUP_KEY}" "SpaceTrail" '"$INSTDIR\SpaceTrail.exe" --broker'
+  ${ElseIf} $2 == '"'
+    WriteRegStr HKCU "${STARTUP_KEY}" "SpaceTrail" '"$INSTDIR\SpaceTrail.exe"'
   ${EndIf}
-startup_ready:
   IfSilent done
   Exec '"$INSTDIR\SpaceTrail.exe" --broker'
 done:
@@ -147,6 +146,7 @@ Section "Uninstall"
   ${EndIf}
   ReadRegStr $0 HKCU "${STARTUP_KEY}" "SpaceTrail"
   ${If} $0 == '"$INSTDIR\SpaceTrail.exe" --broker'
+  ${OrIf} $0 == '"$INSTDIR\SpaceTrail.exe"'
     DeleteRegValue HKCU "${STARTUP_KEY}" "SpaceTrail"
   ${EndIf}
   Delete "$SMPROGRAMS\SpaceTrail.lnk"

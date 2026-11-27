@@ -4,13 +4,13 @@ SpaceTrail keeps a local index of your local drives, so you can explore its file
 
 ## Install the preview
 
-Download **SpaceTrail-Setup-x64.exe** for most Intel and AMD PCs or **SpaceTrail-Setup-arm64.exe** for Windows on Arm. [Windows preview release](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.0)
+Download **SpaceTrail-Setup-x64.exe** for most Intel and AMD PCs or **SpaceTrail-Setup-arm64.exe** for Windows on Arm. [Windows preview release](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.1)
 
 Run Setup on Windows 11 for a new installation or to update an existing copy. Setup closes running copies, replaces the application, and keeps your saved index and sign-in preference. SpaceTrail is available in the Start menu.
 
 SpaceTrail starts scanning accessible fixed drives with drive letters automatically. **First Scan** shows each drive and its progress. A saved drive index resumes after the update, and additional drives start their own scans. Files and Search cover all indexed drives by default, and the Drive selector narrows the view. You can still limit scanning to a folder in **Settings**.
 
-The broker continues in the notification area after you close the window. Manage background startup in **Settings**.
+On first launch, choose **Open at Sign-in** to open the SpaceTrail window when you sign in to Windows, or **Not Now** to keep your current startup setting. Under **Settings → Startup**, choose whether to open SpaceTrail, index in the background, or turn startup off. The broker continues in the notification area after you close the window.
 
 - **Storage** shows free space and usage history by drive, recent file growth, and the largest files and folders.
 - **Files and Search** offer sorting, name and file type filters, Windows thumbnails, and a **Show system files** option.

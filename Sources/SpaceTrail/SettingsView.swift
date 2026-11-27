@@ -1,7 +1,9 @@
+import AppKit
 import SwiftUI
 
 struct SettingsView: View {
     @Bindable var model: DashboardModel
+    let loginLaunch: LoginLaunch
     @Binding var showsMenuBarIcon: Bool
     @State private var showingAccess = false
     @State private var previewAccessError: String?
@@ -9,6 +11,24 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("Startup") {
+                Toggle("Open SpaceTrail at login", isOn: Binding(
+                    get: { loginLaunch.isRegistered },
+                    set: { loginLaunch.setEnabled($0) }
+                ))
+                if loginLaunch.needsApproval {
+                    Text("Allow SpaceTrail in Login Items & Extensions to finish setup.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Button("Open Login Items") { loginLaunch.openLoginItems() }
+                }
+                if let error = loginLaunch.error {
+                    Label(error, systemImage: "exclamationmark.triangle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
+
             Section("Menu Bar") {
                 Toggle("Show SpaceTrail in the menu bar", isOn: $showsMenuBarIcon)
             }
@@ -99,7 +119,13 @@ struct SettingsView: View {
         }
         .formStyle(.grouped)
         .frame(width: 510, height: 460)
-        .onAppear { model.refreshService() }
+        .onAppear {
+            model.refreshService()
+            loginLaunch.refresh()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            loginLaunch.refresh()
+        }
         .alert("Previews", isPresented: $showingPreviewAccessError, presenting: previewAccessError) { _ in
             Button("OK", role: .cancel) {}
         } message: { message in Text(message) }

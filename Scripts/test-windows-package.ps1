@@ -96,18 +96,29 @@ function Assert-Install($Version) {
     }
 }
 
-$OldSetup = Join-Path $env:RUNNER_TEMP "SpaceTrail-0.2.0-$Architecture.exe"
-Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.2.0/SpaceTrail-Setup-$Architecture.exe" -OutFile $OldSetup
+function Startup-Entry {
+    (Get-ItemProperty -LiteralPath $StartKey -ErrorAction SilentlyContinue).SpaceTrail
+}
+
+function Choose-Startup($Window, $Choice) {
+    Wait-For { Named $Window 'Open SpaceTrail at sign-in?' } 'the first-launch sign-in prompt' | Out-Null
+    $Button = @(Wait-For { Named $Window $Choice } "the $Choice button")[0]
+    Invoke-Control $Button
+    Wait-For { -not (Named $Window 'Open SpaceTrail at sign-in?') } 'the sign-in prompt to close' | Out-Null
+}
+
+$OldSetup = Join-Path $env:RUNNER_TEMP "SpaceTrail-0.3.0-$Architecture.exe"
+Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.3.0/SpaceTrail-Setup-$Architecture.exe" -OutFile $OldSetup
 $ExpectedHash = if ($Architecture -eq 'x64') {
-    '51990d559d366f5ec52ab53709f955a665a1a639881d87edc385fba6c6809d5a'
+    'f56468246f1a6fbf6e370fc6da757d77152828fa1361a6a6ed713c3277ffe72f'
 } else {
-    '607aed30b136612d5ffafb5f415023eb48636bcef04a1c44e5b0201b22465605'
+    'd8f4a9074e7afa4a00925bd8505c0842c37b024a270da07d336886ac0c73998f'
 }
 if ((Get-FileHash -LiteralPath $OldSetup -Algorithm SHA256).Hash -ne $ExpectedHash) {
     throw 'The previous installer did not match the released checksum.'
 }
 Run-Checked $OldSetup '/S'
-Assert-Install '0.2.0'
+Assert-Install '0.3.0'
 
 New-Item -ItemType Directory -Path $Scan, $Support -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $Scan 'Field notes.pdf') -Value '%PDF-1.7'
@@ -119,19 +130,23 @@ New-Item -Path $StartKey -Force | Out-Null
 Set-ItemProperty -Path $StartKey -Name 'SpaceTrail' -Value '"C:\Portable\SpaceTrail-x64.exe" --broker'
 $OldProcess = Start-Desktop $LegacyAppData
 $OldWindow = Find-Window $OldProcess
-Wait-For { Named $OldWindow 'Recent growth' } 'the 0.2.0 desktop before updating' | Out-Null
+Wait-For { Named $OldWindow 'Search by name' } 'the 0.3.0 desktop before updating' | Out-Null
 Run-Checked $Setup '/S'
 $Version = [regex]::Match((Get-Content (Join-Path $Repository 'windows\Cargo.toml') -Raw), '(?m)^version = "([0-9.]+)"').Groups[1].Value
 Assert-Install $Version
 $OldProcess.Refresh()
 if (-not $OldProcess.HasExited) { throw 'Setup left the old desktop running.' }
-if ((Get-ItemProperty -LiteralPath $StartKey).SpaceTrail -ne ('"{0}" --broker' -f $App)) {
+$BackgroundEntry = '"{0}" --broker' -f $App
+$WindowEntry = '"{0}"' -f $App
+if ((Startup-Entry) -ne $BackgroundEntry) {
     throw 'Setup did not migrate the existing sign-in entry.'
 }
 $Window = $null
 try {
     $Process = Start-Desktop $LegacyAppData
     $Window = Find-Window $Process
+    Choose-Startup $Window 'Not Now'
+    if ((Startup-Entry) -ne $BackgroundEntry) { throw 'Declining window startup changed the existing background entry.' }
     Test-Search $Window
     Invoke-Control (@(Named $Window 'Settings')[0])
     Wait-For { Named $Window 'Scan all drives' } 'the previous folder scope in Settings' | Out-Null
@@ -141,12 +156,20 @@ try {
 } finally {
     Run-Checked $App '--shutdown'
 }
-Write-Output 'In-place update from 0.2.0 and saved index search verified.'
+Write-Output 'In-place update from 0.3.0, saved index search, and background-only startup verified.'
+
+Run-Checked $Uninstall '/S'
+if (Startup-Entry) { throw 'Uninstall left the background sign-in entry registered.' }
+Run-Checked $Setup '/S'
+Assert-Install $Version
+if (Startup-Entry) { throw 'A fresh install registered startup before the user answered.' }
 
 $Window = $null
 try {
     $Process = Start-Desktop $NewAppData
     $Window = Find-Window $Process
+    Choose-Startup $Window 'Open at Sign-in'
+    if ((Startup-Entry) -ne $WindowEntry) { throw 'Opting in did not register the desktop window for sign-in.' }
     Wait-For { Named $Window 'First Scan' } 'the automatic first scan' | Out-Null
     $Fixed = @([IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady })
     if ($Fixed.Count -lt 1) { throw 'The test host has no readable fixed drive.' }
@@ -167,11 +190,29 @@ try {
     Run-Checked $App '--shutdown'
 }
 
+Run-Checked $Setup '/S'
+if ((Startup-Entry) -ne $WindowEntry) { throw 'Setup changed the existing window sign-in entry.' }
+$Window = $null
+try {
+    $Process = Start-Desktop $NewAppData
+    $Window = Find-Window $Process
+    Wait-For { Named $Window 'Search by name' } 'the desktop after opting in' | Out-Null
+    Invoke-Control (@(Named $Window 'Settings')[0])
+    Wait-For { Named $Window 'When I sign in' } 'the startup setting after relaunch' | Out-Null
+    if (Named $Window 'Open SpaceTrail at sign-in?') { throw 'The sign-in prompt appeared again after opting in.' }
+} catch {
+    Show-Window-Diagnostics $Window
+    throw
+} finally {
+    Run-Checked $App '--shutdown'
+}
+Write-Output 'First-launch consent and preservation of the window sign-in entry verified.'
+
 Run-Checked $Uninstall '/S'
 if ((Test-Path -LiteralPath $App) -or (Test-Path -LiteralPath $Shortcut) -or (Test-Path -LiteralPath $AppsKey)) {
     throw 'Uninstall left the application registered.'
 }
-if ((Get-ItemProperty -LiteralPath $StartKey).SpaceTrail) { throw 'Uninstall left the sign-in entry registered.' }
+if (Startup-Entry) { throw 'Uninstall left the window sign-in entry registered.' }
 if (-not (Test-Path -LiteralPath $Settings) -or -not (Test-Path -LiteralPath (Join-Path $Support 'index.sqlite'))) {
     throw 'Uninstall removed saved scan data.'
 }

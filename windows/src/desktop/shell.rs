@@ -1,5 +1,6 @@
 use super::text;
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 use spacetrail::{broker, display_path, platform::wide};
 use std::{
     env,
@@ -81,6 +82,15 @@ pub fn reveal(path: &Path) -> Result<()> {
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const RUN_VALUE: &str = "SpaceTrail";
+const MAX_STARTUP_COMMAND: usize = 260;
+
+#[derive(Clone, Copy, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StartupMode {
+    Off,
+    Background,
+    Open,
+}
 
 pub fn prefers_dark() -> bool {
     let key = text(r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize");
@@ -101,31 +111,53 @@ pub fn prefers_dark() -> bool {
     status == ERROR_SUCCESS && light == 0
 }
 
-pub fn launch_at_login() -> bool {
+pub fn startup_mode() -> StartupMode {
     let key = text(RUN_KEY);
     let name = text(RUN_VALUE);
-    unsafe {
+    let mut command = [0_u16; MAX_STARTUP_COMMAND + 1];
+    let mut bytes = std::mem::size_of_val(&command) as u32;
+    let status = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,
             key.as_ptr(),
             name.as_ptr(),
             RRF_RT_REG_SZ,
             null_mut(),
-            null_mut(),
-            null_mut(),
-        ) == ERROR_SUCCESS
+            command.as_mut_ptr().cast(),
+            &mut bytes,
+        )
+    };
+    if status != ERROR_SUCCESS {
+        return StartupMode::Off;
+    }
+    let command = String::from_utf16_lossy(&command[..bytes as usize / 2]);
+    let command = command.trim_end_matches('\0');
+    if command.ends_with("\" --broker") {
+        StartupMode::Background
+    } else if command.ends_with('"') {
+        StartupMode::Open
+    } else {
+        StartupMode::Off
     }
 }
 
-pub fn set_launch_at_login(enabled: bool) -> Result<()> {
+pub fn set_startup_mode(mode: StartupMode) -> Result<()> {
     let key = text(RUN_KEY);
     let name = text(RUN_VALUE);
-    unsafe {
-        let status = if enabled {
-            let mut command = OsString::from("\"");
-            command.push(env::current_exe()?);
-            command.push("\" --broker");
-            let command = wide(&command);
+    let status = if mode == StartupMode::Off {
+        unsafe { RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr()) }
+    } else {
+        let mut command = OsString::from("\"");
+        command.push(env::current_exe()?);
+        command.push("\"");
+        if mode == StartupMode::Background {
+            command.push(" --broker");
+        }
+        let command = wide(&command);
+        if command.len() > MAX_STARTUP_COMMAND + 1 {
+            bail!("The SpaceTrail installation path is too long to start at sign-in.");
+        }
+        unsafe {
             RegSetKeyValueW(
                 HKEY_CURRENT_USER,
                 key.as_ptr(),
@@ -134,12 +166,10 @@ pub fn set_launch_at_login(enabled: bool) -> Result<()> {
                 command.as_ptr().cast(),
                 (command.len() * 2) as u32,
             )
-        } else {
-            RegDeleteKeyValueW(HKEY_CURRENT_USER, key.as_ptr(), name.as_ptr())
-        };
-        if status != ERROR_SUCCESS && (enabled || status != ERROR_FILE_NOT_FOUND) {
-            return Err(std::io::Error::from_raw_os_error(status as i32).into());
         }
+    };
+    if status != ERROR_SUCCESS && !(mode == StartupMode::Off && status == ERROR_FILE_NOT_FOUND) {
+        return Err(std::io::Error::from_raw_os_error(status as i32).into());
     }
     Ok(())
 }

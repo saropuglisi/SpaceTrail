@@ -4,7 +4,7 @@
   <p><strong>See what takes up space on your Mac.</strong></p>
   <p>Browse files, folders, and storage history from an index that updates in the background.</p>
   <p><code>macOS 14+</code> · <code>Swift 6</code> · <code>SwiftUI</code> · <code>SQLite</code></p>
-  <p><a href="https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.0">Windows Setup</a> · <a href="#quick-start">Quick Start</a> · <a href="#features">Features</a> · <a href="#architecture">Architecture</a></p>
+  <p><a href="https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.1">Windows Setup</a> · <a href="#quick-start">Quick Start</a> · <a href="#features">Features</a> · <a href="#architecture">Architecture</a></p>
 </div>
 
 ## Features
@@ -38,7 +38,7 @@ The window also handles side buttons mapped to **⌘[** and **⌘]** by a mouse 
 
 ## Quick Start
 
-[Download SpaceTrail Setup for Windows](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.0) or see the [Windows documentation](windows/README.md).
+[Download SpaceTrail Setup for Windows](https://github.com/saropuglisi/SpaceTrail/releases/tag/windows-v0.3.1) or see the [Windows documentation](windows/README.md).
 
 You’ll need **macOS 14 or later** and **Swift 6** from Xcode 16 or a compatible toolchain. Build and launch SpaceTrail from the repository root.
 
@@ -48,6 +48,8 @@ open dist/SpaceTrail.app
 ```
 
 Choose a disk access mode on first launch. **Limited Access** indexes accessible locations. To include supported protected folders, follow the **Full Disk Access** setup for SpaceTrail Broker. After the first scan, the broker keeps the index current while the app is closed if macOS permits it to run in the background.
+
+Choose **Open at Login** during setup to open the SpaceTrail window when you log in. You can change your choice under **Settings → Startup**. If macOS requires approval, use **Open Login Items** to finish setup.
 
 The build script signs the local app ad hoc. Set `SPACETRAIL_SIGN_IDENTITY` before building to use an existing signing identity. macOS may ask you to confirm access again after an ad hoc rebuild.
 

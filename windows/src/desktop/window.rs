@@ -1,3 +1,4 @@
+use super::shell::StartupMode;
 use super::snapshot::{Activity, Job, Revisions, Section, Snapshot, View};
 use super::{icon, module, shell, text, win_result};
 use anyhow::{Context, Result};
@@ -5,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use spacetrail::{broker, catalog::Scope};
 use std::{
     borrow::Cow,
+    fs::File,
     mem::size_of,
     num::NonZeroIsize,
     path::{Path, PathBuf},
@@ -35,6 +37,7 @@ const HISTORY: u32 = WM_APP + 2;
 const TIMER: usize = 1;
 const APP_PAGE: &str = "spacetrail://local.invalid/index.html";
 const APP_HOST: &str = "spacetrail.local.invalid";
+const STARTUP_CHOICE: &str = "startup-choice";
 
 fn is_app_page(uri: &Uri) -> bool {
     uri.scheme_str() == Some("https")
@@ -78,7 +81,7 @@ enum Command {
     Ready,
     View(View),
     Scan { all_drives: bool },
-    Startup { enabled: bool },
+    Startup { mode: Option<StartupMode> },
     Retry,
     Reveal { drive: String, id: i64 },
     Preview { drive: String, id: i64, token: u64 },
@@ -176,13 +179,29 @@ impl App {
         );
     }
 
-    fn settings(&self) {
+    fn settings(&self, startup_error: Option<String>) {
+        let startup = shell::startup_mode();
         self.emit(
             "config",
             serde_json::json!({
-                "startup": shell::launch_at_login()
+                "startup": startup,
+                "offer_startup": startup != StartupMode::Open
+                    && !self.support.join(STARTUP_CHOICE).is_file(),
+                "startup_error": startup_error,
             }),
         );
+    }
+
+    fn save_startup(&self, mode: Option<StartupMode>) -> Result<()> {
+        if let Some(mode) = mode {
+            shell::set_startup_mode(mode)?;
+        }
+        let marker = File::create(self.support.join(STARTUP_CHOICE));
+        // A saved window entry is sufficient to remember the opt-in.
+        if mode != Some(StartupMode::Open) {
+            marker?;
+        }
+        Ok(())
     }
 
     fn refresh(&mut self, force: bool) {
@@ -295,7 +314,7 @@ impl App {
     fn command(&mut self, command: Command) {
         let result = match command {
             Command::Ready => {
-                self.settings();
+                self.settings(None);
                 Ok(())
             }
             Command::View(view) => {
@@ -311,11 +330,10 @@ impl App {
                     None => Ok(()),
                 })
             }
-            Command::Startup { enabled } => {
-                let result = shell::set_launch_at_login(enabled)
-                    .context("Could not save the sign-in preference");
-                self.settings();
-                result
+            Command::Startup { mode } => {
+                let error = self.save_startup(mode).err().map(|error| error.to_string());
+                self.settings(error);
+                Ok(())
             }
             Command::Retry => {
                 self.started = Instant::now();

@@ -58,6 +58,7 @@ let stack = [view];
 let position = 0;
 let serial = 0;
 let config = null;
+let savingStartup = false;
 let loaded = null;
 let status = {scope: "all_drives", drives: [], paused: false};
 let previewToken = 0;
@@ -819,7 +820,7 @@ function updateSettings() {
   location.textContent = status.scope === "folder" ? status.drives[0]?.path || "Selected folder" : "All local drives";
   location.title = location.textContent;
   $("all-drives").hidden = status.scope !== "folder";
-  $("startup-setting").checked = config.startup;
+  $("startup-setting").value = config.startup;
 }
 
 settingsButton.addEventListener("click", () => {
@@ -835,7 +836,21 @@ for (const [id, all_drives] of [["all-drives", true], ["change-location", false]
     send("scan", {all_drives});
   });
 }
-$("startup-setting").addEventListener("change", (event) => send("startup", {enabled: event.target.checked}));
+const startupPrompt = $("startup-prompt");
+function saveStartup(mode) {
+  if (savingStartup) return;
+  savingStartup = true;
+  send("startup", {mode});
+}
+
+$("startup-setting").addEventListener("change", (event) => saveStartup(event.target.value));
+$("skip-startup").addEventListener("click", () => saveStartup(null));
+$("enable-startup").addEventListener("click", () => saveStartup("open"));
+startupPrompt.addEventListener("cancel", (event) => {
+  event.preventDefault();
+  saveStartup(null);
+});
+startupPrompt.addEventListener("close", () => $("main").focus({preventScroll: true}));
 $("preview-reveal").addEventListener("click", () => {
   if (previewEntry) send("reveal", {drive: previewEntry.drive, id: previewEntry.id});
   $("preview").close();
@@ -870,8 +885,16 @@ window.SpaceTrail = {
       case "config": {
         const first = config === null;
         config = data;
+        savingStartup = false;
         updateSettings();
-        if (first) showView(false, false);
+        if (first) {
+          showView(false, false);
+          if (data.offer_startup) startupPrompt.showModal();
+        }
+        const error = data.startup_error ? "Could not save your sign-in choice. " + data.startup_error : "";
+        $("startup-prompt-error").textContent = startupPrompt.open ? error : "";
+        $("startup-settings-error").textContent = startupPrompt.open ? "" : error;
+        if (startupPrompt.open && !data.offer_startup && !error) startupPrompt.close();
         break;
       }
       case "scope_changed":
