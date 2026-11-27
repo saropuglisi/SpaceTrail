@@ -54,4 +54,11 @@ jobs:
           if-no-files-found: error
       - name: Verify installation and desktop
         shell: powershell
+        env:
+          SPACETRAIL_DEMO_FRAMES: ${{ matrix.arch == 'x64' && format('{0}/spacetrail-demo', runner.temp) || '' }}
         run: ./Scripts/test-windows-package.ps1 -Architecture '${{ matrix.arch }}'
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: matrix.arch == 'x64'
+        with:
+          name: SpaceTrail-Windows-demo-frames
+          path: ${{ runner.temp }}/spacetrail-demo/*.png

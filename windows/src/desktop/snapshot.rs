@@ -28,6 +28,8 @@ pub(super) struct View {
     history_drive: Option<String>,
     query: String,
     format: String,
+    #[serde(default)]
+    minimum_file_bytes: i64,
     hide_system: bool,
     sort: Sort,
     ascending: bool,
@@ -262,13 +264,17 @@ fn load_data(indexes: &[DriveIndex<'_>], view: &View) -> Result<Data> {
     let mut request = Request {
         query: view.query.trim().chars().take(240).collect(),
         extensions: format_extensions(&view.format),
+        minimum_file_bytes: if browsing { 0 } else { view.minimum_file_bytes },
         hide_system: view.hide_system && !browsing,
         include_folders: view.section == Section::Search,
         sort: view.sort,
         ascending: view.ascending,
         ..Default::default()
     };
-    if view.section == Section::Search && request.query.is_empty() && request.extensions.is_empty()
+    if view.section == Section::Search
+        && request.query.is_empty()
+        && request.extensions.is_empty()
+        && request.minimum_file_bytes <= 0
     {
         return Ok(result);
     }

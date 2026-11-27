@@ -189,8 +189,10 @@ select { max-width: min(265px, 100%); text-overflow: ellipsis; }
 .check { display: inline-flex; align-items: center; gap: 7px; min-height: 29px; cursor: pointer; }
 .check input { width: 15px; height: 15px; margin: 0; accent-color: var(--action); flex: none; }
 .filter-bar { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 7px; }
+.search-group { display: flex; flex: 1 1 300px; min-width: 0; gap: 7px; }
+.filter-controls { display: flex; flex-wrap: wrap; gap: 7px; }
 .search-field {
-  flex: 1 0 min(225px, 100%); display: flex; align-items: center; gap: 7px;
+  flex: 1; min-width: 0; display: flex; align-items: center; gap: 7px;
   min-height: 33px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); padding-inline: 9px;
 }
 .search-field:focus-within { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }

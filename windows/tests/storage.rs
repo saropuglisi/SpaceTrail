@@ -134,6 +134,18 @@ fn compact_index_searches_and_recovers_removed_entries() {
     assert_eq!(page.rows.len(), 1);
     assert_eq!(page.rows[0].logical, 8192);
     assert_eq!(page.rows[0].path, report);
+    let allocated = page.rows[0].allocated;
+    assert!(allocated > 0);
+    let mut filter = Request {
+        query: "cafe".into(),
+        extensions: vec!["pdf".into()],
+        minimum_file_bytes: allocated,
+        include_folders: true,
+        ..Default::default()
+    };
+    assert_eq!(reader.page(&filter).unwrap().rows[0].path, report);
+    filter.minimum_file_bytes += 1;
+    assert!(reader.page(&filter).unwrap().rows.is_empty());
     assert_eq!(reader.storage(7).unwrap().recent.len(), 0);
     drop(reader);
 

@@ -61,7 +61,7 @@ public struct IndexReader: Sendable {
         let measured = try FootprintIndex.isAvailable(in: db)
         let schema = try IndexSchema.read(from: db)
         let format = FormatFilter(filters.format)
-        if case .search = scope, format == nil || filters.kind == .folders ||
+        if case .search = scope, !filters.limitsToFiles || filters.kind == .folders ||
             !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return try searchPage(db: db, text: search, sort: sort, ascending: ascending,
                                   offset: offset, limit: limit, measured: measured, schema: schema, filters: filters, format: format)
@@ -88,6 +88,10 @@ public struct IndexReader: Sendable {
                     conditions.append("name_fts MATCH ?")
                     values.append(.text(match))
                 }
+            }
+            if filters.minimumFileBytes > 0 {
+                conditions.append("e.allocated >= ?")
+                values.append(.int(filters.minimumFileBytes))
             }
         case .children(let key):
             if key.tree == .system && !visibility.isEmpty { return EntryPage(rows: [], hasMore: false) }
@@ -117,7 +121,7 @@ public struct IndexReader: Sendable {
     private func searchPage(db: SQLiteConnection, text: String, sort: EntrySort, ascending: Bool,
                             offset: Int, limit: Int, measured: Bool, schema: IndexSchema,
                             filters: SearchFilters, format: FormatFilter?) throws -> EntryPage {
-        if format != nil, filters.kind == .folders { return EntryPage(rows: [], hasMore: false) }
+        if filters.limitsToFiles, filters.kind == .folders { return EntryPage(rows: [], hasMore: false) }
         let folded = foldedName(String(text.prefix(512)))
         let tokens = folded.split(whereSeparator: \.isWhitespace).map(String.init)
         guard !tokens.isEmpty else { return EntryPage(rows: [], hasMore: false) }
@@ -135,22 +139,27 @@ public struct IndexReader: Sendable {
             }
         }
         var conditions = ["e.parent IS NOT NULL"]
-        switch format == nil ? filters.kind : .files {
+        let kind: SearchFilters.Kind = filters.limitsToFiles ? .files : filters.kind
+        switch kind {
         case .all: break
         case .files: conditions.append("e.kind <> 1")
         case .folders: conditions.append("e.kind = 1")
         }
         if try !visibleRows(in: db).isEmpty { conditions.append("e.tree = 0") }
         if let format { conditions.append(format.predicate) }
+        var filterValues = format?.values ?? []
+        if filters.minimumFileBytes > 0 {
+            conditions.append("e.allocated >= ?")
+            filterValues.append(.int(filters.minimumFileBytes))
+        }
         let basePredicate = conditions.joined(separator: " AND ")
-        let formatValues = format?.values ?? []
         var match = grams.sorted().map(ftsTerm).joined(separator: " AND ")
         if !match.isEmpty, let indexedMatch = format?.indexedMatch {
             match += " AND (\(indexedMatch))"
         }
         let wordValues = words.map(SQLValue.text)
         let direction = ascending ? "ASC" : "DESC"
-        let column = sortColumn(sort, entries: "e", mixed: format == nil, measured: measured)
+        let column = sortColumn(sort, entries: "e", mixed: kind != .files, measured: measured)
         let count = min(max(1, limit), 500)
         let bounds: [SQLValue] = [.int(Int64(count + 1)), .int(Int64(max(0, offset)))]
         let columns = schema.columns()
@@ -175,7 +184,7 @@ public struct IndexReader: Sendable {
                 )
                 SELECT \(columns) FROM hits CROSS JOIN entries e ON e.rowid = hits.entry_id
                 ORDER BY hits.name_key \(direction), hits.entry_id \(direction)
-                """, wordValues + formatValues + bounds) { rows.append(IndexedEntry($0)) }
+                """, wordValues + filterValues + bounds) { rows.append(IndexedEntry($0)) }
             if rows.count > count {
                 return EntryPage(rows: try withFootprints(rows.prefix(count), in: db, measured: measured), hasMore: true)
             }
@@ -183,7 +192,7 @@ public struct IndexReader: Sendable {
         }
 
         let source: String
-        var values = formatValues
+        var values = filterValues
         if match.isEmpty {
             source = "entries e"
             conditions += ["e.name_key >= ?", "e.name_key < ?"]
@@ -208,7 +217,7 @@ public struct IndexReader: Sendable {
            let similarity = SimilarNames(tokens.joined(separator: " ")) {
             let exact = Set(rows.map { $0.entry.id })
             let limit = min(count - rows.count, 12)
-            let ids = try similarity.candidates(in: db, where: basePredicate, bindings: formatValues, limit: limit + rows.count)
+            let ids = try similarity.candidates(in: db, where: basePredicate, bindings: filterValues, limit: limit + rows.count)
             if !ids.isEmpty {
                 let ranked = ids.indices.map { "(?, \($0))" }.joined(separator: ", ")
                 try db.query("""

@@ -248,6 +248,7 @@ pub struct Request {
     pub hide_system: bool,
     pub query: String,
     pub extensions: Vec<String>,
+    pub minimum_file_bytes: i64,
     pub sort: Sort,
     pub ascending: bool,
     pub offset: usize,
@@ -345,8 +346,16 @@ impl Reader {
         if let Some(folder) = request.folder {
             conditions.push("e.parent=?".to_owned());
             args.push(folder.into());
-        } else if !request.include_folders {
+        }
+        if (request.folder.is_none() && !request.include_folders)
+            || !request.extensions.is_empty()
+            || request.minimum_file_bytes > 0
+        {
             conditions.push("e.directory IS NULL".to_owned());
+        }
+        if request.minimum_file_bytes > 0 {
+            conditions.push("e.allocated>=?".to_owned());
+            args.push(request.minimum_file_bytes.into());
         }
         let query = crate::fold_name(request.query.trim());
         if query.chars().count() >= 3 {
@@ -384,7 +393,6 @@ impl Reader {
                     args.push(extension.into());
                 }
             }
-            conditions.push("e.directory IS NULL".to_owned());
             conditions.push(format!("({})", filters.join(" OR ")));
         }
         if request.hide_system {

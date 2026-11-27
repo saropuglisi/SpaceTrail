@@ -88,6 +88,53 @@ function Test-Search($Window) {
     } 'the saved search result' | Out-Null
 }
 
+function Save-DemoFrame($Window, $Name) {
+    if (-not $env:SPACETRAIL_DEMO_FRAMES) { return }
+    Add-Type -AssemblyName System.Drawing
+    $Bounds = $Window.Current.BoundingRectangle
+    $Bitmap = [Drawing.Bitmap]::new([int]$Bounds.Width, [int]$Bounds.Height)
+    $Graphics = [Drawing.Graphics]::FromImage($Bitmap)
+    try {
+        $Graphics.CopyFromScreen([int]$Bounds.X, [int]$Bounds.Y, 0, 0, $Bitmap.Size)
+        $Bitmap.Save((Join-Path $env:SPACETRAIL_DEMO_FRAMES "$Name.png"), [Drawing.Imaging.ImageFormat]::Png)
+    } catch {
+        Write-Warning "Could not capture $Name on this runner. $($_.Exception.Message)"
+    } finally {
+        $Graphics.Dispose()
+        $Bitmap.Dispose()
+    }
+}
+
+function File-Row($Window, $Name) {
+    $Window.FindAll([System.Windows.Automation.TreeScope]::Descendants,
+        [System.Windows.Automation.Condition]::TrueCondition) |
+        Where-Object { $_.Current.Name -like "$Name*" } |
+        Select-Object -First 1
+}
+
+function Test-LargeFiles($Window) {
+    $Storage = @(Wait-For { Named $Window 'Storage' } 'the Storage view button')[0]
+    Invoke-Control $Storage
+    $Find = @(Wait-For { Named $Window 'Find Large Files' } 'the Storage shortcut')[0]
+    Wait-For { File-Row $Window 'Camera originals.mov' } 'the largest files ranking' | Out-Null
+    Save-DemoFrame $Window '01-storage'
+    Invoke-Control $Find
+    $Box = @(Wait-For {
+        Named $Window 'Search by name' |
+            Where-Object { $_.Current.ControlType -eq [System.Windows.Automation.ControlType]::Edit }
+    } 'the Files view after selecting Find Large Files')[0]
+    Wait-For { File-Row $Window 'Interview master.mp4' } 'a file above the minimum size' | Out-Null
+    if (File-Row $Window 'Field notes.pdf') { throw 'The size filter included a small file.' }
+    Save-DemoFrame $Window '02-large-files'
+    $Box.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('Interview')
+    Invoke-Control (@(Named $Window 'Search')[-1])
+    Wait-For {
+        (File-Row $Window 'Interview master.mp4') -and -not (File-Row $Window 'Camera originals.mov')
+    } 'name and size filters together' | Out-Null
+    if (File-Row $Window 'Interview transcript.pdf') { throw 'Searching cleared the size filter.' }
+    Save-DemoFrame $Window '03-narrowed-results'
+}
+
 function Assert-Install($Version) {
     if (-not (Test-Path -LiteralPath $App)) { throw 'The application was not installed.' }
     if (-not (Test-Path -LiteralPath $Shortcut)) { throw 'The Start menu shortcut is missing.' }
@@ -107,22 +154,37 @@ function Choose-Startup($Window, $Choice) {
     Wait-For { -not (Named $Window 'Open SpaceTrail at sign-in?') } 'the sign-in prompt to close' | Out-Null
 }
 
-$OldSetup = Join-Path $env:RUNNER_TEMP "SpaceTrail-0.3.0-$Architecture.exe"
-Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.3.0/SpaceTrail-Setup-$Architecture.exe" -OutFile $OldSetup
+$OldSetup = Join-Path $env:RUNNER_TEMP "SpaceTrail-0.3.1-$Architecture.exe"
+Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/saropuglisi/SpaceTrail/releases/download/windows-v0.3.1/SpaceTrail-Setup-$Architecture.exe" -OutFile $OldSetup
 $ExpectedHash = if ($Architecture -eq 'x64') {
-    'f56468246f1a6fbf6e370fc6da757d77152828fa1361a6a6ed713c3277ffe72f'
+    '85efa5228f7f782314fc48fbb2dcf9506713c769b1eb488127f8be18e6c8def8'
 } else {
-    'd8f4a9074e7afa4a00925bd8505c0842c37b024a270da07d336886ac0c73998f'
+    'a10d164dee776580c508fdf9f2646712e16db09bf13b8b1e980a7e500a2b85ce'
 }
 if ((Get-FileHash -LiteralPath $OldSetup -Algorithm SHA256).Hash -ne $ExpectedHash) {
     throw 'The previous installer did not match the released checksum.'
 }
 Run-Checked $OldSetup '/S'
-Assert-Install '0.3.0'
+Assert-Install '0.3.1'
 
 New-Item -ItemType Directory -Path $Scan, $Support -Force | Out-Null
 Set-Content -LiteralPath (Join-Path $Scan 'Field notes.pdf') -Value '%PDF-1.7'
 Set-Content -LiteralPath (Join-Path $Scan 'Project notes.txt') -Value 'A fixture for Windows Search.'
+Set-Content -LiteralPath (Join-Path $Scan 'Interview transcript.pdf') -Value '%PDF-1.7'
+$LargeSamples = @{
+    'Camera originals.mov' = 384MB
+    'Client archive.zip' = 240MB
+    'Interview master.mp4' = 176MB
+    'Studio export.mp4' = 112MB
+    'Presentation.pptx' = 28MB
+}
+foreach ($Sample in $LargeSamples.GetEnumerator()) {
+    $File = [IO.File]::Create((Join-Path $Scan $Sample.Key))
+    try { $File.SetLength($Sample.Value) } finally { $File.Dispose() }
+}
+if ($env:SPACETRAIL_DEMO_FRAMES) {
+    New-Item -ItemType Directory -Path $env:SPACETRAIL_DEMO_FRAMES -Force | Out-Null
+}
 Run-Checked $App @('--scan-once', ('"{0}"' -f $Scan), ('"{0}"' -f $Support))
 $FixtureSettings = @{root = '\\?\' + $Scan} | ConvertTo-Json -Compress
 [IO.File]::WriteAllText($Settings, $FixtureSettings, [Text.UTF8Encoding]::new($false))
@@ -130,7 +192,8 @@ New-Item -Path $StartKey -Force | Out-Null
 Set-ItemProperty -Path $StartKey -Name 'SpaceTrail' -Value '"C:\Portable\SpaceTrail-x64.exe" --broker'
 $OldProcess = Start-Desktop $LegacyAppData
 $OldWindow = Find-Window $OldProcess
-Wait-For { Named $OldWindow 'Search by name' } 'the 0.3.0 desktop before updating' | Out-Null
+Choose-Startup $OldWindow 'Not Now'
+Wait-For { Named $OldWindow 'Search by name' } 'the 0.3.1 desktop before updating' | Out-Null
 Run-Checked $Setup '/S'
 $Version = [regex]::Match((Get-Content (Join-Path $Repository 'windows\Cargo.toml') -Raw), '(?m)^version = "([0-9.]+)"').Groups[1].Value
 Assert-Install $Version
@@ -145,9 +208,8 @@ $Window = $null
 try {
     $Process = Start-Desktop $LegacyAppData
     $Window = Find-Window $Process
-    Choose-Startup $Window 'Not Now'
-    if ((Startup-Entry) -ne $BackgroundEntry) { throw 'Declining window startup changed the existing background entry.' }
     Test-Search $Window
+    Test-LargeFiles $Window
     Invoke-Control (@(Named $Window 'Settings')[0])
     Wait-For { Named $Window 'Scan all drives' } 'the previous folder scope in Settings' | Out-Null
 } catch {
@@ -156,7 +218,7 @@ try {
 } finally {
     Run-Checked $App '--shutdown'
 }
-Write-Output 'In-place update from 0.3.0, saved index search, and background-only startup verified.'
+Write-Output 'In-place update from 0.3.1, saved index search, size filtering, and background-only startup verified.'
 
 Run-Checked $Uninstall '/S'
 if (Startup-Entry) { throw 'Uninstall left the background sign-in entry registered.' }

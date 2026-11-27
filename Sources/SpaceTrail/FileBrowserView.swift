@@ -120,7 +120,9 @@ struct FileBrowserView: View {
 
     private var folders: Bool { model.activeSection == .folders }
     private var global: Bool { model.activeSection == .search }
-    private var format: FileFormat { global ? model.searchFilters.format : model.fileFormat }
+    private var filters: SearchFilters { global ? model.searchFilters : model.fileFilters }
+    private var format: FileFormat { filters.format }
+    private var minimumSize: MinimumFileSize { MinimumFileSize(rawValue: filters.minimumFileBytes) ?? .any }
     private var searchThumbnailSize: FileThumbnail.Size? {
         switch searchLayout {
         case .grid: return .cover
@@ -192,7 +194,9 @@ struct FileBrowserView: View {
         .alert("File Extension", isPresented: $showsExtensionPicker) {
             TextField("Extension", text: $customExtension)
             Button("Apply") {
-                if let format = FileFormat(fileExtension: customExtension) { model.selectFormat(format) }
+                if let format = FileFormat(fileExtension: customExtension) {
+                    model.updateBrowserFilters { $0.format = format }
+                }
             }
             .disabled(FileFormat(fileExtension: customExtension) == nil)
             Button("Cancel", role: .cancel) {}
@@ -319,7 +323,7 @@ struct FileBrowserView: View {
                     .padding(16)
             } else if global && !model.request.hasQuery {
                 ContentUnavailableView("Search Disk", systemImage: "magnifyingglass",
-                                       description: Text("Enter a name and press Return, or choose a file format."))
+                                       description: Text("Enter a name and press Return, or choose a format or minimum size."))
             } else if let error = model.browseError {
                 if global {
                     ContentUnavailableView {
@@ -595,18 +599,24 @@ struct FileBrowserView: View {
             Label(hasSearch ? "No Results" : "No Indexed Items",
                   systemImage: hasSearch ? "magnifyingglass" : "folder")
         } description: {
-            if global, !model.submittedSearch.isEmpty { Text("No matches for “\(model.submittedSearch)”.") }
+            if !folders, minimumSize != .any { Text("No files match that minimum size and the other filters.") }
+            else if global, !model.submittedSearch.isEmpty { Text("No matches for “\(model.submittedSearch)”.") }
             else if format != .all, !folders { Text("Try another file format.") }
             else if hasSearch { Text("Try a different name.") }
             else if folders, model.folderInfo == nil { Text("This folder may have been moved or deleted.") }
             else if folders { Text("The index has no accessible items in this folder.") }
         } actions: {
-            if global, !model.submittedSearch.isEmpty, !model.searchFilters.similar,
+            if !folders, minimumSize != .any {
+                Button("Clear Size Filter") { model.updateBrowserFilters { $0.minimumFileBytes = 0 } }
+            }
+            else if global, !model.submittedSearch.isEmpty, !model.searchFilters.similar,
                model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) == model.submittedSearch {
                 Button("Include Similar Names") { model.searchFilters.similar = true }
             }
             else if !search.wrappedValue.isEmpty { Button("Clear Search") { search.wrappedValue = "" } }
-            else if !folders, format != .all { Button("Clear Format Filter") { model.selectFormat(.all) } }
+            else if !folders, format != .all {
+                Button("Clear Format Filter") { model.updateBrowserFilters { $0.format = .all } }
+            }
             else if folders, model.folder.path != model.folder.tree.root, model.folderInfo == nil {
                 Button("Go Back") { model.upOneFolder() }
             }
@@ -631,9 +641,9 @@ struct FileBrowserView: View {
                 searchInput
                 HStack(spacing: 8) { searchOptions }
             }
-            if !model.submittedSearch.isEmpty,
-               model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) != model.submittedSearch {
-                Text("Results for “\(model.submittedSearch)”")
+            if model.globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) != model.submittedSearch {
+                Text(model.submittedSearch.isEmpty ? "Press Return to search by name."
+                     : "Results for “\(model.submittedSearch)”")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -666,22 +676,25 @@ struct FileBrowserView: View {
     private var searchOptions: some View {
         Menu {
             Toggle("Include Similar Names", isOn: $model.searchFilters.similar)
-            Picker("Show", selection: $model.searchFilters.kind) {
-                Text("All").tag(SearchFilters.Kind.all)
-                Text("Files").tag(SearchFilters.Kind.files)
-                Text("Folders").tag(SearchFilters.Kind.folders)
+            if !filters.limitsToFiles {
+                Picker("Show", selection: $model.searchFilters.kind) {
+                    Text("All").tag(SearchFilters.Kind.all)
+                    Text("Files").tag(SearchFilters.Kind.files)
+                    Text("Folders").tag(SearchFilters.Kind.folders)
+                }
             }
-            .disabled(format != .all)
         } label: {
             Label(filterLabel, systemImage: "line.3.horizontal.decrease")
         }
         .help("Include separate words and small typos. Turn off similar names to match the exact phrase.")
         formatMenu
+        sizeMenu
         if model.request.hasQuery, layout.wrappedValue == .grid { sortMenu }
         viewPicker
     }
 
     private var filterLabel: String {
+        if filters.limitsToFiles { return "Files Only" }
         switch model.searchFilters.kind {
         case .files: return "Files Only"
         case .folders: return "Folders Only"
@@ -711,6 +724,7 @@ struct FileBrowserView: View {
                     searchInput
                     HStack(spacing: 8) {
                         formatMenu
+                        sizeMenu
                         sortMenu
                         viewPicker
                     }
@@ -724,7 +738,7 @@ struct FileBrowserView: View {
     private var formatMenu: some View {
         Menu {
             ForEach(FileFormat.presets, id: \.self) { choice in
-                Button { model.selectFormat(choice) } label: {
+                Button { model.updateBrowserFilters { $0.format = choice } } label: {
                     if choice == format { Label(choice.title, systemImage: "checkmark") }
                     else { Text(choice.title) }
                 }
@@ -743,6 +757,22 @@ struct FileBrowserView: View {
         .accessibilityLabel("File Format")
         .accessibilityValue(format.title)
         .help("Filter by file format")
+    }
+
+    private var sizeMenu: some View {
+        Menu {
+            ForEach(MinimumFileSize.allCases, id: \.self) { choice in
+                Button { model.updateBrowserFilters { $0.minimumFileBytes = choice.rawValue } } label: {
+                    if choice == minimumSize { Label(choice.title, systemImage: "checkmark") }
+                    else { Text(choice.title) }
+                }
+            }
+        } label: {
+            Label(minimumSize.title, systemImage: "internaldrive")
+        }
+        .accessibilityLabel("Minimum File Size on Disk")
+        .accessibilityValue(minimumSize.title)
+        .help("Filter files by the space they use on disk")
     }
 
     private var viewPicker: some View {

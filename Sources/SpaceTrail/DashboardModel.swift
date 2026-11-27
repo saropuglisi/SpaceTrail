@@ -24,6 +24,16 @@ enum DashboardSection: String, Identifiable, CaseIterable {
     }
 }
 
+enum MinimumFileSize: Int64, CaseIterable {
+    case any = 0
+    case tenMegabytes = 10_000_000
+    case hundredMegabytes = 100_000_000
+    case oneGigabyte = 1_000_000_000
+    case tenGigabytes = 10_000_000_000
+
+    var title: String { self == .any ? "Any Size" : "\(StorageStyle.size(rawValue))+" }
+}
+
 struct PageRequest: Equatable {
     let scope: EntryScope
     let sort: EntrySort
@@ -35,7 +45,7 @@ struct PageRequest: Equatable {
     let submission: Int
     var revision: String?
 
-    var hasQuery: Bool { !search.isEmpty || filters.format != .all }
+    var hasQuery: Bool { !search.isEmpty || filters.limitsToFiles }
 
     var withoutRevision: Self {
         var request = self
@@ -122,7 +132,7 @@ final class DashboardModel {
     var fileSearch = ""
     private var submittedFileSearch = ""
     private var fileSearchSubmission = 0
-    private(set) var fileFormat: FileFormat = .all
+    private(set) var fileFilters = SearchFilters()
     var globalSearch = ""
     var searchFilters = SearchFilters()
     private(set) var submittedSearch = ""
@@ -248,10 +258,11 @@ final class DashboardModel {
         case \StorageEntry.modified: field = .modified
         default: field = .logical
         }
+        let filters = activeSection == .search ? submittedFilters : (scope == .files ? fileFilters : SearchFilters())
         return PageRequest(scope: scope, sort: field,
                            ascending: sort?.order == .forward, search: search,
                            page: page, limit: scope == .search ? Self.searchPageSize : Self.pageSize,
-                           filters: scope == .search ? submittedFilters : SearchFilters(format: scope == .files ? fileFormat : .all),
+                           filters: filters,
                            submission: submission, revision: revision)
     }
 
@@ -513,7 +524,7 @@ final class DashboardModel {
 
     func submitSearch() {
         submittedSearch = globalSearch.trimmingCharacters(in: .whitespacesAndNewlines)
-        submittedFilters = searchFilters
+        submittedFilters = effectiveSearchFilters
         searchSubmission += 1
         resetPage(clear: true)
     }
@@ -525,20 +536,35 @@ final class DashboardModel {
     }
 
     func applySearchFilters() {
-        guard request.hasQuery, searchFilters != submittedFilters,
-              globalSearch.trimmingCharacters(in: .whitespacesAndNewlines) == submittedSearch else { return }
-        submitSearch()
+        let filters = effectiveSearchFilters
+        guard filters != submittedFilters else { return }
+        submittedFilters = filters
+        resetPage(clear: true)
     }
 
-    func selectFormat(_ format: FileFormat) {
+    private var effectiveSearchFilters: SearchFilters {
+        var filters = searchFilters
+        if filters.limitsToFiles { filters.kind = .files }
+        return filters
+    }
+
+    func updateBrowserFilters(_ change: (inout SearchFilters) -> Void) {
         if activeSection == .search {
-            searchFilters.format = format
-            if format != .all, searchFilters.kind == .folders { searchFilters.kind = .files }
-            submitSearch()
+            change(&searchFilters)
+            applySearchFilters()
         } else if activeSection == .files {
-            fileFormat = format
-            submitFileSearch()
+            change(&fileFilters)
+            resetPage(clear: true)
         }
+    }
+
+    func findLargeFiles() {
+        fileSearch = ""
+        submittedFileSearch = ""
+        fileFilters = SearchFilters()
+        fileFilters.minimumFileBytes = MinimumFileSize.hundredMegabytes.rawValue
+        fileOrder = [KeyPathComparator(\StorageEntry.diskBytes, order: .reverse)]
+        navigate(to: .files)
     }
 
     func clearSearch() {

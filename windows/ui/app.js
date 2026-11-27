@@ -33,6 +33,8 @@ const formats = [
   ["audio", "Audio"], ["document", "Documents"], ["ebook", "Books"],
   ["archive", "Archives"], ["installer", "Installers"],
 ];
+const largeFileMinimum = 100_000_000;
+const fileSizes = [0, 10_000_000, largeFileMinimum, 1_000_000_000, 10_000_000_000];
 const phases = {
   starting: "Preparing",
   scanning: "Scanning",
@@ -50,7 +52,8 @@ const chartTime = new Intl.DateTimeFormat("en", {hour: "numeric", minute: "2-dig
 const mapColors = ["#303c5b", "#3c4b77", "#4b5087", "#5c4b8f", "#6c4993", "#82509a"];
 
 const freshView = (section) => ({
-  section, folder: null, query: "", format: "", hide_system: true, sort: "disk", ascending: false,
+  section, folder: null, query: "", format: "", minimum_file_bytes: 0,
+  hide_system: true, sort: "disk", ascending: false,
   drive: null, history_drive: null, offsets: {}, pageOffsets: [{}], days: 7,
 });
 let view = freshView("files");
@@ -314,7 +317,16 @@ function renderScreen() {
   picker.id = "drive-picker";
   picker.setAttribute("aria-label", "Drive");
   picker.addEventListener("change", () => selectDrive(picker.value || null));
-  header.append(heading, picker);
+  const actions = node("div", "heading-actions");
+  actions.append(picker);
+  if (view.section === "storage") {
+    const find = button("Find Large Files", "search", () => go({
+      ...freshView("files"), drive: view.drive, minimum_file_bytes: largeFileMinimum,
+    }));
+    find.title = "Find files using at least 100 MB on disk";
+    actions.append(find);
+  }
+  header.append(heading, actions);
   const scan = node("div");
   scan.id = "scan-status";
   screen.append(header, scan);
@@ -540,6 +552,11 @@ function renderBrowser(screen) {
     query.placeholder = qualifier;
     query.maxLength = 240;
     field.append(icon("search"), node("span", "sr-only", qualifier), query);
+    const search = node("button", "button primary", "Search");
+    search.type = "submit";
+    const input = node("div", "search-group");
+    input.append(field, search);
+    const controls = node("div", "filter-controls");
     const format = node("select");
     format.setAttribute("aria-label", "File type");
     for (const [value, text] of formats) {
@@ -548,12 +565,27 @@ function renderBrowser(screen) {
       format.append(option);
     }
     format.value = view.format;
-    format.addEventListener("change", () => submit());
-    const search = node("button", "button primary", "Search");
-    search.type = "submit";
-    const submit = () => resetPaging({query: query.value.trim(), format: format.value});
-    form.addEventListener("submit", (event) => { event.preventDefault(); submit(); });
-    form.append(field, format, search);
+    format.addEventListener("change", () => resetPaging({format: format.value}));
+    controls.append(format);
+    if (view.section !== "folders") {
+      const size = node("select");
+      size.setAttribute("aria-label", "Minimum File Size on Disk");
+      size.title = "Filter files by the space they use on disk";
+      for (const bytes of fileSizes) {
+        const option = node("option", "", bytes ? formatBytes(bytes) + "+" : "Any size");
+        option.value = bytes;
+        size.append(option);
+      }
+      size.value = view.minimum_file_bytes;
+      size.addEventListener("change", () => resetPaging({minimum_file_bytes: Number(size.value)}));
+      controls.append(size);
+      query.addEventListener("input", renderQueryInfo);
+    }
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      resetPaging({query: query.value.trim()});
+    });
+    form.append(input, controls);
     screen.append(form);
     if (view.section !== "folders") {
       const options = node("div", "file-options");
@@ -610,6 +642,14 @@ function replaceResults(container, next) {
   if (focused) container.querySelector("[data-entry='" + focused + "']")?.focus({preventScroll: true});
 }
 
+function renderQueryInfo() {
+  const info = $("query-info");
+  if (!info) return;
+  const draft = $("query").value.trim();
+  info.textContent = view.query ? "Results for “" + view.query + "”"
+    : draft ? "Press Enter to search by name." : "";
+}
+
 function renderResults() {
   if (!config) return;
   if (view.section === "storage") {
@@ -621,17 +661,19 @@ function renderResults() {
   }
   const target = $("browser-results");
   if (!target) return;
-  if ($("query-info")) $("query-info").textContent = view.query ? "Results for “" + view.query + "”" : "";
+  renderQueryInfo();
   renderFolderPath(loaded?.folder);
   const drive = $("drive-picker");
   renderDrivePicker(drive, status.drives, !isBrowsing(), view.drive || loaded?.folder?.drive);
-  target.setAttribute("aria-busy", String(!loaded));
-  if (view.section === "search" && !view.query && !view.format) {
-    target.replaceChildren(empty("search", "Find a file or folder", "Enter a name or choose a file type to search."));
+  const filtered = view.query || view.format || view.minimum_file_bytes > 0;
+  const waitingForInput = view.section === "search" && !filtered;
+  target.setAttribute("aria-busy", String(!loaded && !waitingForInput));
+  if (waitingForInput) {
+    target.replaceChildren(empty("search", "Find a file or folder", "Enter a name or choose a file type or minimum size."));
     return;
   }
   if (!loaded) {
-    target.replaceChildren(empty("loading", view.query ? "Searching the index" : "Loading indexed files"));
+    target.replaceChildren(empty("loading", filtered ? "Searching the index" : "Loading indexed files"));
     return;
   }
   if (!status.drives.length) {
@@ -643,7 +685,8 @@ function renderResults() {
     return;
   }
   if (!loaded.items?.length) {
-    const text = view.query || view.format ? "Try a different name or file type." : "Items appear here as they are indexed.";
+    const text = view.minimum_file_bytes ? "Try a smaller minimum size or a different filter."
+      : filtered ? "Try a different name or file type." : "Items appear here as they are indexed.";
     target.replaceChildren(empty(view.section === "map" ? "map" : "files",
       indexing() ? "Waiting for the first results" : "No items found", text));
     return;

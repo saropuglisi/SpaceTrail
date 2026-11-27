@@ -121,6 +121,9 @@ public struct SearchFilters: Equatable, Sendable {
     public var kind: Kind = .all
     public var similar = true
     public var format: FileFormat = .all
+    public var minimumFileBytes: Int64 = 0
+
+    public var limitsToFiles: Bool { format != .all || minimumFileBytes > 0 }
 
     public init(format: FileFormat = .all) {
         self.format = format

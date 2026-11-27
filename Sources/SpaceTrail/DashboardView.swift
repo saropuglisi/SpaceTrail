@@ -118,16 +118,23 @@ struct DashboardView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(model.activeSection == .folders ? model.folderTitle : model.activeSection.rawValue)
-                .font(.system(size: 29, weight: .semibold))
-                .tracking(-0.65)
-                .lineLimit(1)
-                .accessibilityAddTraits(.isHeader)
-            Text(subtitle)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
+        HStack(spacing: StorageStyle.gap) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(model.activeSection == .folders ? model.folderTitle : model.activeSection.rawValue)
+                    .font(.system(size: 29, weight: .semibold))
+                    .tracking(-0.65)
+                    .lineLimit(1)
+                    .accessibilityAddTraits(.isHeader)
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 0)
+            if model.activeSection == .space {
+                Button("Find Large Files", systemImage: "magnifyingglass", action: model.findLargeFiles)
+                    .help("Find files using at least 100 MB on disk")
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, StorageStyle.inset)
