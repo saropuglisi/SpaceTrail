@@ -2,12 +2,6 @@ name: Windows installers
 
 on:
   workflow_dispatch:
-  push:
-    branches: ['codex/windows-*']
-    paths:
-      - 'windows/**'
-      - 'Scripts/*windows*'
-      - '.github/workflows/windows.yml'
 
 permissions:
   contents: read

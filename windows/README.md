@@ -41,7 +41,7 @@ rustup target add x86_64-pc-windows-gnullvm aarch64-pc-windows-gnullvm
 
 Native Windows builds include SQLite and the WebView2 loader in the executable. Cross-builds place the executable and its architecture-specific WebView2 loader DLL together in `dist/windows/SpaceTrail-x64` or `dist/windows/SpaceTrail-arm64`. Keep the two files together.
 
-With NSIS installed on Windows, run `.\Scripts\package-windows.ps1` to create the setup executable. Setup includes Microsoft's WebView2 bootstrapper for systems that need the runtime. The [Windows build workflow](../.github/workflows/windows.yml) builds and checks each installer on its target architecture.
+With NSIS installed on Windows, run `.\Scripts\package-windows.ps1` to create the setup executable. Setup includes Microsoft's WebView2 bootstrapper for systems that need the runtime. When preparing a release, start **Windows installers** with **Run workflow** in GitHub Actions. It builds and checks both installer architectures. [Windows installer workflow](https://github.com/saropuglisi/SpaceTrail/actions/workflows/windows.yml)
 
 ## Verify
 
